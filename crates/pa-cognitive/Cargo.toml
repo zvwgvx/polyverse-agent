@@ -1,0 +1,16 @@
+[package]
+name = "pa-cognitive"
+description = "Cognitive layer — LLM integration for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pa-core = { path = "../pa-core" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }

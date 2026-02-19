@@ -1,0 +1,15 @@
+[package]
+name = "pa-runtime"
+description = "Supervisor, event bus, and coordinator for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pa-core = { path = "../pa-core" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

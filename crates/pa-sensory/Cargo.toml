@@ -1,0 +1,15 @@
+[package]
+name = "pa-sensory"
+description = "Platform adapters (Discord, Telegram) for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pa-core = { path = "../pa-core" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serenity = { workspace = true }
+teloxide = { workspace = true }
+chrono = { workspace = true }

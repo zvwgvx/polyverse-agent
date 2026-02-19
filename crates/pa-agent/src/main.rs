@@ -1,0 +1,247 @@
+use anyhow::Result;
+use serde::Deserialize;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
+
+use pa_cognitive::{LlmConfig, LlmWorker};
+use pa_runtime::{Coordinator, Supervisor};
+use pa_sensory::{DiscordWorker, TelegramWorker};
+
+// ─── Configuration ───────────────────────────────────────────
+
+/// Agent configuration.
+/// Priority: .env file → environment variables → config.toml → defaults
+#[derive(Debug, Deserialize)]
+struct Config {
+    #[serde(default)]
+    discord: DiscordConfig,
+    #[serde(default)]
+    telegram: TelegramConfig,
+    #[serde(default)]
+    agent: AgentConfig,
+    #[serde(default)]
+    llm: LlmFileConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DiscordConfig {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TelegramConfig {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    #[serde(default = "default_log_level")]
+    log_level: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            name: default_name(),
+            log_level: default_log_level(),
+        }
+    }
+}
+
+/// LLM config from config.toml (can be overridden by env vars)
+#[derive(Debug, Default, Deserialize)]
+struct LlmFileConfig {
+    #[serde(default)]
+    api_base: String,
+    #[serde(default)]
+    api_key: String,
+    #[serde(default)]
+    model: String,
+}
+
+fn default_name() -> String {
+    "PolyverseAgent".to_string()
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+/// Load configuration with the following priority:
+/// 1. `.env` file (loaded into process env vars via dotenvy)
+/// 2. Existing environment variables (override .env)
+/// 3. `config.toml` file (base config)
+/// 4. Defaults
+fn load_config() -> Result<Config> {
+    // Step 1: Load .env file (silently ignore if not found)
+    match dotenvy::dotenv() {
+        Ok(path) => info!(path = %path.display(), "Loaded .env file"),
+        Err(dotenvy::Error::Io(_)) => {
+            info!("No .env file found, using environment variables only")
+        }
+        Err(e) => warn!(error = %e, "Failed to parse .env file"),
+    }
+
+    // Step 2: Load config.toml as base
+    let config_path =
+        std::env::var("PA_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+
+    let mut config: Config = if std::path::Path::new(&config_path).exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        info!(path = %config_path, "Loaded config file");
+        toml::from_str(&content)?
+    } else {
+        Config {
+            discord: DiscordConfig::default(),
+            telegram: TelegramConfig::default(),
+            agent: AgentConfig::default(),
+            llm: LlmFileConfig::default(),
+        }
+    };
+
+    // Step 3: Environment variables OVERRIDE config.toml values
+
+    if let Ok(token) = std::env::var("DISCORD_TOKEN") {
+        config.discord.token = token;
+        config.discord.enabled = true;
+    }
+
+    if let Ok(token) = std::env::var("TELEGRAM_TOKEN") {
+        config.telegram.token = token;
+        config.telegram.enabled = true;
+    }
+
+    if let Ok(name) = std::env::var("PA_AGENT_NAME") {
+        config.agent.name = name;
+    }
+
+    if let Ok(level) = std::env::var("PA_LOG_LEVEL") {
+        config.agent.log_level = level;
+    }
+
+    // LLM env overrides
+    if let Ok(base) = std::env::var("OPENAI_API_BASE") {
+        config.llm.api_base = base;
+    }
+    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        config.llm.api_key = key;
+    }
+    if let Ok(model) = std::env::var("OPENAI_MODEL") {
+        config.llm.model = model;
+    }
+
+    Ok(config)
+}
+
+// ─── Main ────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Load config (env + file)
+    let config = load_config()?;
+
+    // Initialize tracing/logging
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&config.agent.log_level));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_thread_ids(true)
+        .init();
+
+    info!(
+        name = %config.agent.name,
+        "=== Polyverse Agent Starting ==="
+    );
+
+    // Create supervisor
+    let mut supervisor = Supervisor::new();
+
+    // Register sensory workers based on config
+    let mut worker_count = 0;
+
+    if config.discord.enabled && !config.discord.token.is_empty() {
+        info!("Registering Discord worker");
+        supervisor.register(DiscordWorker::new(config.discord.token.clone()));
+        worker_count += 1;
+    } else if config.discord.enabled {
+        warn!("Discord enabled but no token provided (set DISCORD_TOKEN in .env)");
+    }
+
+    if config.telegram.enabled && !config.telegram.token.is_empty() {
+        info!("Registering Telegram worker");
+        supervisor.register(TelegramWorker::new(config.telegram.token.clone()));
+        worker_count += 1;
+    } else if config.telegram.enabled {
+        warn!("Telegram enabled but no token provided (set TELEGRAM_TOKEN in .env)");
+    }
+
+    // Register LLM worker
+    let llm_config = LlmConfig {
+        api_base: config.llm.api_base.clone(),
+        api_key: config.llm.api_key.clone(),
+        model: config.llm.model.clone(),
+    };
+
+    if llm_config.is_valid() {
+        info!(
+            api_base = %llm_config.api_base,
+            model = %llm_config.model,
+            "Registering LLM worker"
+        );
+        supervisor.register(LlmWorker::new(llm_config));
+        worker_count += 1;
+    } else {
+        warn!("LLM not configured (set OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL in .env)");
+    }
+
+    if worker_count == 0 {
+        info!("No workers enabled. Running in headless mode.");
+        info!("Configure workers via .env file.");
+    }
+
+    // Create and spawn the coordinator
+    let broadcast_tx = supervisor.event_bus().broadcast_tx.clone();
+    let shutdown_rx = supervisor.event_bus().shutdown_tx.subscribe();
+    let mut coordinator = Coordinator::new(broadcast_tx);
+
+    // Take the event receiver from the bus — coordinator owns it
+    let event_rx = supervisor
+        .event_bus_mut()
+        .take_event_rx()
+        .expect("event_rx already taken");
+
+    let coordinator_handle = tokio::spawn(async move {
+        if let Err(e) = coordinator.run(event_rx, shutdown_rx).await {
+            error!(error = %e, "Coordinator error");
+        }
+    });
+
+    // Start all workers
+    supervisor.start_all().await?;
+
+    info!(
+        workers = worker_count,
+        "=== Polyverse Agent Running ==="
+    );
+    info!("Press Ctrl+C to shutdown");
+
+    // Wait for shutdown signal
+    tokio::signal::ctrl_c().await?;
+    info!("Shutdown signal received");
+
+    // Graceful shutdown
+    supervisor.shutdown().await?;
+    coordinator_handle.abort();
+
+    info!("=== Polyverse Agent Stopped ===");
+    Ok(())
+}

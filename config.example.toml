@@ -1,0 +1,18 @@
+# Polyverse Agent Configuration
+# Copy this to config.toml and fill in your tokens.
+
+[agent]
+name = "PolyverseAgent"
+log_level = "info"    # trace, debug, info, warn, error
+
+# Discord Bot
+# Get your token from https://discord.com/developers/applications
+[discord]
+enabled = false
+token = "YOUR_DISCORD_BOT_TOKEN"
+
+# Telegram Bot
+# Get your token from @BotFather
+[telegram]
+enabled = false
+token = "YOUR_TELEGRAM_BOT_TOKEN"
