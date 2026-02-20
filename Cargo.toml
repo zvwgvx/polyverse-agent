@@ -5,6 +5,7 @@ members = [
     "crates/pa-runtime",
     "crates/pa-sensory",
     "crates/pa-cognitive",
+    "crates/pa-memory",
     "crates/pa-agent",
 ]
 
@@ -36,7 +37,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 
 # Discord
 serenity = { version = "0.12", features = ["client", "gateway", "model", "cache"] }
@@ -46,3 +47,22 @@ teloxide = { version = "0.13", features = ["macros"] }
 
 # Env
 dotenvy = "0.15"
+
+# ─── Release Profiles ────────────────────────────────────────
+
+# `cargo run --release` / `cargo build --release`
+# Maximum performance for production use.
+[profile.release]
+opt-level = 3         # full optimization
+lto = "thin"          # cross-crate optimization (faster than "fat", better than false)
+codegen-units = 1     # single codegen unit — best inlining/optimization
+panic = "abort"       # no unwinding overhead; smaller binary
+strip = "symbols"     # strip debug symbols for smaller binary
+
+# `cargo build --profile fast-release`
+# Quick optimized build for development — skips LTO for faster compile times.
+[profile.fast-release]
+inherits = "release"
+lto = false
+codegen-units = 16
+strip = "none"

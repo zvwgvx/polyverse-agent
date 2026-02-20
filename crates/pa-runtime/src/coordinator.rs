@@ -125,13 +125,16 @@ impl Coordinator {
             }
 
             Event::Response(response) => {
-                debug!(
+                info!(
                     platform = %response.platform,
                     source = ?response.source,
-                    "Routing response to sensory worker"
+                    content_len = response.content.len(),
+                    "Broadcasting response to sensory workers"
                 );
                 // Broadcast response — the appropriate sensory worker will pick it up
-                let _ = self.broadcast_tx.send(event);
+                if let Err(e) = self.broadcast_tx.send(event) {
+                    warn!(error = %e, "No subscribers for response broadcast");
+                }
 
                 // Back to idle
                 if self.state == AgentState::WaitingForCloud {

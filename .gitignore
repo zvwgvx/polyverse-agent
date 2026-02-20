@@ -4,6 +4,9 @@
 # Build artifacts
 /target
 
+# Memory database
+/data/
+
 # IDE
 .idea/
 .vscode/
@@ -13,3 +16,4 @@
 # OS
 .DS_Store
 Thumbs.db
+`

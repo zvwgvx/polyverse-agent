@@ -4,6 +4,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use pa_cognitive::{LlmConfig, LlmWorker};
+use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker};
 
@@ -184,6 +185,13 @@ async fn main() -> Result<()> {
         warn!("Telegram enabled but no token provided (set TELEGRAM_TOKEN in .env)");
     }
 
+    // Register Memory worker (always — memory is core)
+    let memory_worker = MemoryWorker::new("data/ryuuko_memory.db");
+    let short_term_handle = memory_worker.short_term_handle();
+    supervisor.register(memory_worker);
+    worker_count += 1;
+    info!("Registered Memory worker");
+
     // Register LLM worker
     let llm_config = LlmConfig {
         api_base: config.llm.api_base.clone(),
@@ -197,7 +205,9 @@ async fn main() -> Result<()> {
             model = %llm_config.model,
             "Registering LLM worker"
         );
-        supervisor.register(LlmWorker::new(llm_config));
+        supervisor.register(
+            LlmWorker::new(llm_config).with_memory(short_term_handle),
+        );
         worker_count += 1;
     } else {
         warn!("LLM not configured (set OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL in .env)");

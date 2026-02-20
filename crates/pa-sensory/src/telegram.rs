@@ -187,6 +187,7 @@ impl Worker for TelegramWorker {
                         username: user,
                         content: text.to_string(),
                         is_mention,
+                        is_dm: msg.chat.is_private(),
                         timestamp: chrono::Utc::now(),
                     });
 

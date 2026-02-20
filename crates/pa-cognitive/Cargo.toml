@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 pa-core = { path = "../pa-core" }
+pa-memory = { path = "../pa-memory" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
@@ -14,3 +15,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+futures = "0.3.32"

@@ -108,6 +108,7 @@ impl EventHandler for DiscordHandler {
             username: msg.author.name.clone(),
             content: msg.content.clone(),
             is_mention,
+            is_dm,
             timestamp: chrono::Utc::now(),
         });
 
@@ -170,6 +171,11 @@ impl Worker for DiscordWorker {
                 match broadcast_rx.recv().await {
                     Ok(Event::Response(response)) => {
                         if response.platform == Platform::Discord {
+                            debug!(
+                                channel = %response.channel_id,
+                                content_len = response.content.len(),
+                                "Discord received ResponseEvent"
+                            );
                             let http = http_clone.read().await;
                             if let Some(http) = http.as_ref() {
                                 let channel_id: u64 =
@@ -181,15 +187,18 @@ impl Worker for DiscordWorker {
                                 let mut builder =
                                     CreateMessage::new().content(&response.content);
 
-                                if let Some(ref reply_id) = response.reply_to_message_id {
-                                    if let Ok(msg_id) = reply_id.parse::<u64>() {
-                                        let msg_ref =
-                                            serenity::model::id::MessageId::new(msg_id);
-                                        builder = builder.reference_message(
-                                            serenity::model::channel::MessageReference::from(
-                                                (channel, msg_ref),
-                                            ),
-                                        );
+                                // Reply-tag only in group channels, skip in DMs
+                                if !response.is_dm {
+                                    if let Some(ref reply_id) = response.reply_to_message_id {
+                                        if let Ok(msg_id) = reply_id.parse::<u64>() {
+                                            let msg_ref =
+                                                serenity::model::id::MessageId::new(msg_id);
+                                            builder = builder.reference_message(
+                                                serenity::model::channel::MessageReference::from(
+                                                    (channel, msg_ref),
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
 
@@ -204,6 +213,11 @@ impl Worker for DiscordWorker {
                                         error!(error = %e, "Failed to send Discord message");
                                     }
                                 }
+                            } else {
+                                warn!(
+                                    channel = %response.channel_id,
+                                    "Discord HTTP client not ready (Ready event not yet received), dropping response"
+                                );
                             }
                         }
                     }

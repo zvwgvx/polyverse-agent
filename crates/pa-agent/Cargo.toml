@@ -13,6 +13,7 @@ pa-core = { path = "../pa-core" }
 pa-runtime = { path = "../pa-runtime" }
 pa-sensory = { path = "../pa-sensory" }
 pa-cognitive = { path = "../pa-cognitive" }
+pa-memory = { path = "../pa-memory" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

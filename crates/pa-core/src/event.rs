@@ -33,6 +33,8 @@ pub struct RawEvent {
     pub content: String,
     /// Whether this message mentions/tags the bot directly.
     pub is_mention: bool,
+    /// Whether this is a direct message (private channel)
+    pub is_dm: bool,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -91,6 +93,10 @@ pub struct ResponseEvent {
     pub channel_id: String,
     /// Optional: reply to a specific message
     pub reply_to_message_id: Option<String>,
+    /// Who Ryuuko is replying to (username)
+    pub reply_to_user: Option<String>,
+    /// Whether this response is in a DM (skip reply-tag)
+    pub is_dm: bool,
     pub content: String,
     pub source: ResponseSource,
 }
@@ -163,6 +169,7 @@ mod tests {
             username: "TestUser".to_string(),
             content: "Hello agent!".to_string(),
             is_mention: false,
+            is_dm: false,
             timestamp: Utc::now(),
         };
 
@@ -182,6 +189,7 @@ mod tests {
             username: "user".to_string(),
             content: "test".to_string(),
             is_mention: false,
+            is_dm: false,
             timestamp: Utc::now(),
         });
 
