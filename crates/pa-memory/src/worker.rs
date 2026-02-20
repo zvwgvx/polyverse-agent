@@ -11,6 +11,9 @@ use tracing::{debug, error, info, warn};
 use crate::short_term::ShortTermMemory;
 use crate::store::MemoryStore;
 use crate::types::MemoryMessage;
+use crate::episodic::{EpisodicStore, MemoryEvent};
+use crate::embedder::MemoryEmbedder;
+use crate::compressor::SemanticCompressor;
 
 /// Memory worker: integrates short-term (RAM) and SQLite store.
 ///
@@ -22,6 +25,10 @@ use crate::types::MemoryMessage;
 pub struct MemoryWorker {
     /// Short-term memory (shared with LLM worker for context retrieval)
     pub short_term: Arc<Mutex<ShortTermMemory>>,
+    /// Episodic Store
+    pub episodic: Option<Arc<EpisodicStore>>,
+    pub embedder: Option<Arc<MemoryEmbedder>>,
+    pub compressor: Option<Arc<SemanticCompressor>>,
     /// Database path
     db_path: String,
 }
@@ -34,14 +41,95 @@ impl MemoryWorker {
     pub fn new(db_path: &str) -> Self {
         Self {
             short_term: Arc::new(Mutex::new(ShortTermMemory::new())),
+            episodic: None,
+            embedder: None,
+            compressor: None,
             db_path: db_path.to_string(),
         }
+    }
+
+    pub fn with_episodic(mut self, episodic: Arc<EpisodicStore>) -> Self {
+        self.episodic = Some(episodic);
+        self
+    }
+
+    pub fn with_embedder(mut self, embedder: Arc<MemoryEmbedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    pub fn with_compressor(mut self, compressor: Arc<SemanticCompressor>) -> Self {
+        self.compressor = Some(compressor);
+        self
     }
 
     /// Get a shared reference to short-term memory.
     /// Used by LLM worker to retrieve conversation context.
     pub fn short_term_handle(&self) -> Arc<Mutex<ShortTermMemory>> {
         Arc::clone(&self.short_term)
+    }
+
+    /// Spawns a background task to compress, embed, and store an expired session into Episodic Store.
+    fn ingest_session(
+        messages: Vec<MemoryMessage>,
+        compressor: Arc<SemanticCompressor>,
+        embedder: Arc<MemoryEmbedder>,
+        episodic: Arc<EpisodicStore>,
+    ) {
+        if messages.is_empty() {
+            return;
+        }
+        
+        tokio::spawn(async move {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            
+            let mut transcript = String::new();
+            for msg in &messages {
+                let speaker = if msg.is_bot_response { "Ryuuko" } else { &msg.username };
+                transcript.push_str(&format!("{}: {}\n", speaker, msg.content));
+            }
+
+            match compressor.compress(&transcript).await {
+                Ok(Some(compression)) => {
+                    info!(
+                        session_id = %session_id,
+                        fact = %compression.fact,
+                        importance = compression.importance,
+                        "Memory semantic compression successful"
+                    );
+
+                    match embedder.embed_single(compression.fact.clone()).await {
+                        Ok(vector) => {
+                            let timestamp = messages.last().unwrap().timestamp.timestamp();
+                            let metadata = serde_json::json!({
+                                "message_count": messages.len(),
+                                "first_message_timestamp": messages.first().unwrap().timestamp.timestamp(),
+                            }).to_string();
+
+                            let event = MemoryEvent {
+                                id: session_id.clone(),
+                                vector,
+                                content: compression.fact,
+                                timestamp,
+                                importance: compression.importance,
+                                metadata,
+                            };
+
+                            if let Err(e) = episodic.insert(vec![event]).await {
+                                error!(error = %e, "Failed to insert event into EpisodicStore");
+                            } else {
+                                info!(session_id = %session_id, "Memory event successfully ingested into EpisodicStore");
+                            }
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Failed to embed memory fact");
+                        }
+                    }
+                }
+                Ok(None) => debug!("Semantic compression deemed session trivial; no event to ingest."),
+                Err(e) => error!(error = %e, "Semantic compression API failed"),
+            }
+        });
     }
 }
 
@@ -69,6 +157,10 @@ impl Worker for MemoryWorker {
             existing_messages = msg_count,
             "Memory store opened"
         );
+
+        let episodic = Arc::clone(self.episodic.as_ref().expect("EpisodicStore not initialized"));
+        let embedder = Arc::clone(self.embedder.as_ref().expect("MemoryEmbedder not initialized"));
+        let compressor = Arc::clone(self.compressor.as_ref().expect("SemanticCompressor not initialized"));
 
         let mut broadcast_rx = ctx.subscribe_events();
         let mut shutdown_rx = ctx.subscribe_shutdown();
@@ -118,28 +210,35 @@ impl Worker for MemoryWorker {
                                 if let Err(e) = store.insert_batch(&expired_msgs) {
                                     error!(error = %e, "Failed to persist expired session");
                                 }
+                                
+                                Self::ingest_session(
+                                    expired_msgs,
+                                    Arc::clone(&compressor),
+                                    Arc::clone(&embedder),
+                                    Arc::clone(&episodic),
+                                );
                             }
                         }
-                        Ok(Event::Response(response)) => {
-                            // Record Ryuuko's responses too
+                        Ok(Event::BotTurnCompletion(complete)) => {
+                            // Record Ryuuko's full responses to memory
                             let msg = MemoryMessage::bot_response(
-                                response.platform,
-                                response.channel_id.clone(),
-                                response.content.clone(),
-                                response.reply_to_message_id.clone(),
-                                response.reply_to_user.clone(),
+                                complete.platform,
+                                complete.channel_id.clone(),
+                                complete.content.clone(),
+                                complete.reply_to_message_id.clone(),
+                                complete.reply_to_user.clone(),
                             );
                             debug!(
                                 channel = %msg.channel_id,
                                 reply_to = ?msg.reply_to_user,
-                                "Recording bot response to memory"
+                                "Recording full bot turn to memory"
                             );
 
                             let mut stm = short_term.lock().await;
                             stm.push(msg.clone());
 
                             if let Err(e) = store.insert(&msg) {
-                                error!(error = %e, "Failed to persist bot response");
+                                error!(error = %e, "Failed to persist bot turn completion");
                             }
                         }
                         Ok(_) => {} // Ignore other events
@@ -159,15 +258,22 @@ impl Worker for MemoryWorker {
                         stm.flush_expired()
                     };
 
-                    for (key, messages) in &expired {
+                    for (key, messages) in expired {
                         info!(
                             conversation = %key,
                             messages = messages.len(),
                             "Session expired, flushed to store"
                         );
-                        if let Err(e) = store.insert_batch(messages) {
+                        if let Err(e) = store.insert_batch(&messages) {
                             error!(error = %e, "Failed to persist flushed session");
                         }
+                        
+                        Self::ingest_session(
+                            messages,
+                            Arc::clone(&compressor),
+                            Arc::clone(&embedder),
+                            Arc::clone(&episodic),
+                        );
                     }
                 }
                 _ = shutdown_rx.recv() => {

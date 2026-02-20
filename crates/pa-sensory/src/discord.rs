@@ -116,6 +116,15 @@ impl EventHandler for DiscordHandler {
         // Push RawEvent into the Sensory Buffer for debounce & aggregation
         self.buffer.push(raw).await;
     }
+
+    async fn typing_start(&self, _ctx: Context, event: serenity::all::TypingStartEvent) {
+        let user_id = event.user_id.to_string();
+        let channel_id = event.channel_id.to_string();
+        
+        // We do not know if the typing is in DM or Server from this event alone usually,
+        // but we just pass the ids.
+        self.buffer.typing(Platform::Discord, channel_id, user_id).await;
+    }
 }
 
 #[async_trait]
@@ -151,7 +160,9 @@ impl Worker for DiscordWorker {
 
         let intents = GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::DIRECT_MESSAGES
-            | GatewayIntents::MESSAGE_CONTENT;
+            | GatewayIntents::MESSAGE_CONTENT
+            | GatewayIntents::GUILD_MESSAGE_TYPING
+            | GatewayIntents::DIRECT_MESSAGE_TYPING;
 
         let mut client = match Client::builder(&self.token, intents)
             .event_handler(handler)

@@ -72,7 +72,7 @@ impl MemoryMessage {
             channel_id: raw.channel_id.clone(),
             user_id: raw.user_id.clone(),
             username: raw.username.clone(),
-            content: raw.content.clone(),
+            content: Self::strip_mention_tags(&raw.content),
             is_mention: raw.is_mention,
             is_bot_response: false,
             reply_to_user: None,
@@ -86,11 +86,11 @@ impl MemoryMessage {
         platform: Platform,
         channel_id: String,
         content: String,
-        reply_to: Option<String>,
+        _reply_to: Option<String>,
         reply_to_user: Option<String>,
     ) -> Self {
         Self {
-            id: reply_to.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            id: uuid::Uuid::new_v4().to_string(),
             platform,
             channel_id,
             user_id: "ryuuko".to_string(),
@@ -125,6 +125,29 @@ impl MemoryMessage {
         }
 
         score.min(1.0)
+    }
+
+    /// Strip Discord mention tags (e.g. `<@123456>`) from message content.
+    /// Returns the cleaned content, trimmed of leading/trailing whitespace.
+    fn strip_mention_tags(content: &str) -> String {
+        let mut result = String::with_capacity(content.len());
+        let chars: Vec<char> = content.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '<' && i + 1 < chars.len() && chars[i + 1] == '@' {
+                if let Some(end) = chars[i..].iter().position(|&c| c == '>') {
+                    i += end + 1;
+                    // Skip following space
+                    while i < chars.len() && chars[i] == ' ' {
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+            result.push(chars[i]);
+            i += 1;
+        }
+        result.trim().to_string()
     }
 }
 

@@ -101,6 +101,17 @@ pub struct ResponseEvent {
     pub source: ResponseSource,
 }
 
+/// A fully completed turn from the bot after all streaming chunks are sent.
+/// Used for saving full responses to long-term memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BotTurnCompletion {
+    pub platform: Platform,
+    pub channel_id: String,
+    pub reply_to_message_id: Option<String>,
+    pub reply_to_user: Option<String>,
+    pub content: String,
+}
+
 // ─── Biology Event ───────────────────────────────────────────
 
 /// Internal biology state change events.
@@ -139,6 +150,7 @@ pub enum Event {
     Raw(RawEvent),
     Intent(IntentEvent),
     Response(ResponseEvent),
+    BotTurnCompletion(BotTurnCompletion),
     Biology(BiologyEvent),
     System(SystemEvent),
 }

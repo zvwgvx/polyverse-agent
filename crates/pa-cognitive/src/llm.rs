@@ -11,8 +11,12 @@ use pa_memory::short_term::ShortTermMemory;
 use pa_memory::types::ConversationKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
+
+use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder};
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -65,6 +69,8 @@ struct ReasoningConfig {
 
 #[derive(Debug, Serialize)]
 struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order: Option<Vec<String>>,
     allow_fallbacks: bool,
 }
 
@@ -98,13 +104,17 @@ struct ApiErrorDetail {
 /// It listens for RawEvents where `is_mention == true` (bot was tagged),
 /// sends the message to the LLM, and emits a ResponseEvent with the reply.
 pub struct LlmWorker {
-    config: LlmConfig,
+    pub config: LlmConfig,
     status: WorkerStatus,
     http_client: Client,
     /// System prompt that defines the agent's personality
-    system_prompt: String,
-    /// Shared short-term memory for conversation context
-    short_term: Option<Arc<Mutex<ShortTermMemory>>>,
+    pub system_prompt: String,
+    /// Shared handle to short-term memory (injected by coordinator).
+    pub short_term: Option<Arc<Mutex<ShortTermMemory>>>,
+    /// Shared handle to Episodic Store for semantic searches.
+    pub episodic: Option<Arc<EpisodicStore>>,
+    /// Shared handle to Memory Embedder to vectorize user queries.
+    pub embedder: Option<Arc<MemoryEmbedder>>,
 }
 
 impl LlmWorker {
@@ -120,12 +130,26 @@ impl LlmWorker {
             http_client,
             system_prompt: Self::default_system_prompt(),
             short_term: None,
+            episodic: None,
+            embedder: None,
         }
     }
 
     /// Attach a shared short-term memory handle.
     pub fn with_memory(mut self, stm: Arc<Mutex<ShortTermMemory>>) -> Self {
         self.short_term = Some(stm);
+        self
+    }
+
+    /// Attach a shared episodic memory handle.
+    pub fn with_episodic(mut self, episodic: Arc<EpisodicStore>) -> Self {
+        self.episodic = Some(episodic);
+        self
+    }
+
+    /// Attach a shared embedder handle.
+    pub fn with_embedder(mut self, embedder: Arc<MemoryEmbedder>) -> Self {
+        self.embedder = Some(embedder);
         self
     }
 
@@ -227,6 +251,8 @@ impl Worker for LlmWorker {
         let config = self.config.clone();
         let system_prompt = self.system_prompt.clone();
         let short_term = self.short_term.clone();
+        let episodic = self.episodic.clone();
+        let embedder = self.embedder.clone();
 
         let mut active_tasks = tokio::task::JoinSet::new();
 
@@ -265,11 +291,13 @@ impl Worker for LlmWorker {
                             }
 
                             let http_client = http_client.clone();
-                            let config = config.clone();
-                            let system_prompt = system_prompt.clone();
-                            let event_tx = event_tx.clone();
+                            let cfg = config.clone();
+                            let sys = system_prompt.clone();
+                            let ep = episodic.clone();
+                            let emb = embedder.clone();
+                            let tx = event_tx.clone();
                             let raw_clone = raw.clone();
-                            let username = raw.username.clone();
+                            let username = raw_clone.username.clone(); // Use raw_clone for username
 
                             // Spawn the LLM call into a separate async task so it doesn't block
                             // the worker's broadcast event loop. This allows concurrent processing
@@ -277,12 +305,14 @@ impl Worker for LlmWorker {
                             active_tasks.spawn(async move {
                                 let result = Self::call_llm(
                                     &http_client,
-                                    &config,
-                                    &system_prompt,
+                                    &cfg,
+                                    &sys,
                                     history,
+                                    ep.expect("Episodic store not initialized").clone(),
+                                    emb.expect("Embedder not initialized").clone(),
                                     &username,
                                     &raw_clone,
-                                    &event_tx,
+                                    &tx,
                                 )
                                 .await;
 
@@ -337,10 +367,12 @@ impl Worker for LlmWorker {
 impl LlmWorker {
     /// Static helper to call the LLM API (used inside the event loop).
     async fn call_llm(
-        http_client: &Client,
+        http_client: &reqwest::Client,
         config: &LlmConfig,
         system_prompt: &str,
         history: Vec<(String, String, String)>,
+        episodic: Arc<EpisodicStore>,
+        embedder: Arc<MemoryEmbedder>,
         current_username: &str,
         raw_event: &pa_core::event::RawEvent,
         event_tx: &tokio::sync::mpsc::Sender<Event>,
@@ -358,6 +390,42 @@ impl LlmWorker {
             },
         ];
 
+        // --- RAG Episodic Memory Retrieval ---
+        // Build a search query from the context + new message
+        let recent_context = history.iter()
+            .rev()
+            .take(2)
+            .map(|(_, _, content)| content.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        
+        let search_query = if recent_context.is_empty() {
+            raw_event.content.clone()
+        } else {
+            format!("{} | {}", recent_context, raw_event.content)
+        };
+
+        if let Ok(query_vec) = embedder.embed_single(search_query).await {
+            match episodic.search(&query_vec, 3, 0.5).await {
+                Ok(events) if !events.is_empty() => {
+                    let mut memory_text = String::from("### TỰ SUY NGHĨ (KÝ ỨC CŨ): Những thông tin sau có thể liên quan đến ngữ cảnh cuộc trò chuyện. Hãy linh hoạt sử dụng nếu thấy cần thiết (KHÔNG nhắc lại nguyên văn):\n");
+                    for ev in events {
+                        let date_str = chrono::DateTime::from_timestamp(ev.timestamp, 0)
+                            .map(|dt| dt.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "Unknown date".to_string());
+                        memory_text.push_str(&format!("- [Vào {}]: {}\n", date_str, ev.content));
+                    }
+                    messages.push(ChatMessage {
+                        role: "system".to_string(),
+                        content: memory_text,
+                        name: None,
+                    });
+                }
+                _ => {} // No events found or error searching
+            }
+        }
+
+        // --- Standard Preamble & History ---
         let preamble = if history.is_empty() {
             format!(
                 "[context: đây là tin nhắn đầu tiên từ {}. mày chưa biết người này — đây là người lạ.]",
@@ -403,12 +471,13 @@ impl LlmWorker {
             model: config.model.clone(),
             messages,
             temperature: Some(0.7),
-            max_tokens: Some(512),
+            max_tokens: Some(2048),
             stream: Some(true),
             reasoning: Some(ReasoningConfig {
-                effort: "low".to_string(),
+                effort: "high".to_string(),
             }),
             provider: Some(ProviderConfig {
+                order: Some(vec!["Google AI Studio".to_string()]),
                 allow_fallbacks: true,
             }),
         };
@@ -439,6 +508,7 @@ impl LlmWorker {
         let mut inbound_buffer = String::new();
         let mut output_buffer = String::new();
         let mut is_thinking = false;
+        let mut full_response_buffer = String::new();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.context("Failed to read stream chunk")?;
@@ -486,6 +556,8 @@ impl LlmWorker {
                                                 content = %msg,
                                                 "LLM stream emitted line"
                                             );
+                                            full_response_buffer.push_str(&msg);
+                                            full_response_buffer.push('\n');
                                             let event = Event::Response(ResponseEvent {
                                                 platform: raw_event.platform,
                                                 channel_id: raw_event.channel_id.clone(),
@@ -515,6 +587,7 @@ impl LlmWorker {
                 content = %final_msg,
                 "LLM stream emitted final line"
             );
+            full_response_buffer.push_str(&final_msg);
             let event = Event::Response(ResponseEvent {
                 platform: raw_event.platform,
                 channel_id: raw_event.channel_id.clone(),
@@ -527,6 +600,18 @@ impl LlmWorker {
             if let Err(e) = event_tx.send(event).await {
                 tracing::error!("Failed to send stream final line event: {}", e);
             }
+        }
+
+        let full_response = full_response_buffer.trim().to_string();
+        if !full_response.is_empty() {
+            let event = Event::BotTurnCompletion(pa_core::event::BotTurnCompletion {
+                platform: raw_event.platform,
+                channel_id: raw_event.channel_id.clone(),
+                reply_to_message_id: Some(raw_event.message_id.clone()),
+                reply_to_user: Some(raw_event.username.clone()),
+                content: full_response,
+            });
+            let _ = event_tx.send(event).await;
         }
 
         Ok(())

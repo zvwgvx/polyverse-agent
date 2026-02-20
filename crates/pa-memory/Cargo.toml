@@ -14,3 +14,9 @@ tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+lancedb = "0.26.2"
+ort = "2.0.0-rc.11"
+arrow = "57.3.0"
+fastembed = "5.11.0"
+futures = "0.3.32"
+reqwest.workspace = true

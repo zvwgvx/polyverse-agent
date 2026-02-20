@@ -6,6 +6,11 @@ use pa_core::event::{Event, Platform, RawEvent};
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
+pub enum BufferMsg {
+    Event(RawEvent),
+    Typing,
+}
+
 /// Key to uniquely identify a typing session
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct BufferKey {
@@ -29,7 +34,7 @@ impl BufferKey {
 #[derive(Clone)]
 pub struct SensoryBuffer {
     /// Maps a session to an active tokio task's sender channel
-    active_sessions: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<RawEvent>>>>,
+    active_sessions: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<BufferMsg>>>>,
     /// The global event bus transmitter to send completed aggregated events
     event_tx: mpsc::Sender<Event>,
 }
@@ -50,7 +55,7 @@ impl SensoryBuffer {
 
         if let Some(tx) = sessions.get(&key) {
             // Give message to existing actor task
-            if let Err(e) = tx.send(raw.clone()).await {
+            if let Err(e) = tx.send(BufferMsg::Event(raw.clone())).await {
                 debug!(error = %e, "Failed to send message to buffer actor, it might have just died");
                 // The task closed, fall through to create a new one.
             } else {
@@ -66,48 +71,71 @@ impl SensoryBuffer {
         let event_tx = self.event_tx.clone();
         
         // Push the very first message into its own actor
-        let _ = tx.send(raw).await;
+        let _ = tx.send(BufferMsg::Event(raw)).await;
 
         tokio::spawn(async move {
             Self::debounce_actor(key, rx, event_tx, sessions_clone).await;
         });
     }
 
+    /// Extends the timeout if a session already exists. If not, does nothing.
+    pub async fn typing(&self, platform: Platform, channel_id: String, user_id: String) {
+        let key = BufferKey {
+            platform,
+            channel_id,
+            user_id,
+        };
+        
+        let sessions = self.active_sessions.lock().await;
+        if let Some(tx) = sessions.get(&key) {
+            let _ = tx.send(BufferMsg::Typing).await;
+        }
+    }
+
     /// Actor loop: waits for contiguous messages and emits upon a 3-second timeout silence.
     async fn debounce_actor(
         key: BufferKey,
-        mut rx: mpsc::Receiver<RawEvent>,
+        mut rx: mpsc::Receiver<BufferMsg>,
         event_tx: mpsc::Sender<Event>,
-        sessions_map: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<RawEvent>>>>,
+        sessions_map: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<BufferMsg>>>>,
     ) {
         let mut aggregated: Option<RawEvent> = None;
+        let mut deadline = tokio::time::Instant::now() + Duration::from_secs(3);
 
         loop {
-            // Block and wait for a message for up to 3 seconds.
-            match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
-                Ok(Some(new_msg)) => {
-                    // Received a new message before silence timeout.
-                    if let Some(mut existing) = aggregated.take() {
-                        // Concatenate text
-                        existing.content.push('\n');
-                        existing.content.push_str(&new_msg.content);
-                        // Update boolean flags if the new message escalated them (e.g. they mentioned the bot later)
-                        existing.is_mention |= new_msg.is_mention;
-                        existing.is_dm |= new_msg.is_dm;
-                        // Timestamp assumes the start of the session, but we can update to newest if needed.
-                        existing.timestamp = chrono::Utc::now();
-                        aggregated = Some(existing);
-                    } else {
-                        // First message starts the aggregation
-                        aggregated = Some(new_msg);
+            tokio::select! {
+                msg_opt = rx.recv() => {
+                    match msg_opt {
+                        Some(BufferMsg::Event(new_msg)) => {
+                            if let Some(mut existing) = aggregated.take() {
+                                existing.content.push('\n');
+                                existing.content.push_str(&new_msg.content);
+                                existing.is_mention |= new_msg.is_mention;
+                                existing.is_dm |= new_msg.is_dm;
+                                existing.timestamp = chrono::Utc::now();
+                                aggregated = Some(existing);
+                            } else {
+                                aggregated = Some(new_msg);
+                            }
+                            // Reset deadline
+                            deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+                        }
+                        Some(BufferMsg::Typing) => {
+                            // Reset deadline to give them more time
+                            deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+                            debug!(
+                                user_id = %key.user_id,
+                                "User is typing... extending debounce buffer to 4 seconds"
+                            );
+                        }
+                        None => {
+                            // Channel closed
+                            break;
+                        }
                     }
                 }
-                Ok(None) => {
-                    // The mpsc sender was explicitly dropped.
-                    break;
-                }
-                Err(_) => {
-                    // Timeout Elapsed! 3 seconds of typing silence.
+                _ = tokio::time::sleep_until(deadline) => {
+                    // Timeout hit because deadline was reached
                     break;
                 }
             }

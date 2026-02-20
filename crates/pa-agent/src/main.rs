@@ -185,8 +185,36 @@ async fn main() -> Result<()> {
         warn!("Telegram enabled but no token provided (set TELEGRAM_TOKEN in .env)");
     }
 
+    use std::sync::Arc;
+    use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder, compressor::SemanticCompressor};
+
+    let lancedb_path = std::env::var("LANCE_DB_PATH")
+        .unwrap_or_else(|_| "data/ryuuko_lancedb".to_string());
+    
+    if let Some(parent) = std::path::Path::new(&lancedb_path).parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    info!("Initializing Episodic Memory and Embedding Engine...");
+    let episodic = Arc::new(EpisodicStore::open(&lancedb_path, "episodic_memory").await?);
+    let embedder = Arc::new(MemoryEmbedder::new()?);
+    let compressor_opt = SemanticCompressor::new().ok().map(Arc::new);
+
+    if compressor_opt.is_none() {
+        warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
+    }
+
     // Register Memory worker (always — memory is core)
-    let memory_worker = MemoryWorker::new("data/ryuuko_memory.db");
+    let mut memory_worker = MemoryWorker::new("data/ryuuko_memory.db")
+        .with_episodic(Arc::clone(&episodic))
+        .with_embedder(Arc::clone(&embedder));
+    
+    if let Some(comp) = &compressor_opt {
+        memory_worker = memory_worker.with_compressor(Arc::clone(comp));
+    }
+
     let short_term_handle = memory_worker.short_term_handle();
     supervisor.register(memory_worker);
     worker_count += 1;
@@ -206,7 +234,10 @@ async fn main() -> Result<()> {
             "Registering LLM worker"
         );
         supervisor.register(
-            LlmWorker::new(llm_config).with_memory(short_term_handle),
+            LlmWorker::new(llm_config)
+                .with_memory(short_term_handle)
+                .with_episodic(Arc::clone(&episodic))
+                .with_embedder(Arc::clone(&embedder)),
         );
         worker_count += 1;
     } else {

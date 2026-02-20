@@ -164,6 +164,11 @@ impl Coordinator {
                 }
             }
 
+            Event::BotTurnCompletion(_) => {
+                // Handled natively by MemoryWorker, Coordinator just needs to broadcast
+                let _ = self.broadcast_tx.send(event);
+            }
+
             Event::System(sys) => {
                 debug!(event = ?sys, "System event");
                 // System events are logged, no routing needed
