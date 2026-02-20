@@ -128,9 +128,11 @@ impl Worker for TelegramWorker {
 
         // Set up the message handler using teloxide's Dispatcher
         // We pass bot_username to detect mentions (@botname)
+        let buffer = crate::buffer::SensoryBuffer::new(event_tx.clone());
+
         let handler = Update::filter_message().endpoint(
             move |msg: Message,
-                  event_tx: tokio::sync::mpsc::Sender<Event>,
+                  buffer: crate::buffer::SensoryBuffer,
                   bot_un: String| async move {
                 if let Some(text) = msg.text() {
                     let user = msg
@@ -179,7 +181,7 @@ impl Worker for TelegramWorker {
                         );
                     }
 
-                    let raw_event = Event::Raw(RawEvent {
+                    let raw = RawEvent {
                         platform: Platform::Telegram,
                         channel_id: msg.chat.id.0.to_string(),
                         message_id: msg.id.0.to_string(),
@@ -189,18 +191,16 @@ impl Worker for TelegramWorker {
                         is_mention,
                         is_dm: msg.chat.is_private(),
                         timestamp: chrono::Utc::now(),
-                    });
+                    };
 
-                    if let Err(e) = event_tx.send(raw_event).await {
-                        error!(error = %e, "Failed to emit Telegram raw event");
-                    }
+                    buffer.push(raw).await;
                 }
                 Ok::<(), anyhow::Error>(())
             },
         );
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![event_tx, bot_username])
+            .dependencies(dptree::deps![buffer, bot_username])
             .default_handler(|_| async {})
             .build();
 

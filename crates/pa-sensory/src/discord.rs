@@ -11,6 +11,7 @@ use serenity::Client;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
+use crate::buffer::SensoryBuffer;
 use crate::platform::PlatformAdapter;
 
 /// Discord sensory worker powered by serenity.
@@ -39,7 +40,7 @@ impl DiscordWorker {
 
 /// Internal serenity event handler that bridges Discord events into our event bus.
 struct DiscordHandler {
-    event_tx: tokio::sync::mpsc::Sender<Event>,
+    buffer: SensoryBuffer,
     http_store: Arc<RwLock<Option<Arc<serenity::http::Http>>>>,
     /// The bot's own user ID (set on ready), used to detect mentions.
     bot_user_id: Arc<RwLock<Option<serenity::model::id::UserId>>>,
@@ -100,7 +101,7 @@ impl EventHandler for DiscordHandler {
             );
         }
 
-        let raw_event = Event::Raw(RawEvent {
+        let raw = RawEvent {
             platform: Platform::Discord,
             channel_id: msg.channel_id.to_string(),
             message_id: msg.id.to_string(),
@@ -110,11 +111,10 @@ impl EventHandler for DiscordHandler {
             is_mention,
             is_dm,
             timestamp: chrono::Utc::now(),
-        });
+        };
 
-        if let Err(e) = self.event_tx.send(raw_event).await {
-            error!(error = %e, "Failed to emit Discord raw event");
-        }
+        // Push RawEvent into the Sensory Buffer for debounce & aggregation
+        self.buffer.push(raw).await;
     }
 }
 
@@ -137,11 +137,15 @@ impl Worker for DiscordWorker {
             return Ok(());
         }
 
-        let bot_user_id = Arc::new(RwLock::new(None));
+        // Instantiate sensory buffer
+        let buffer = SensoryBuffer::new(ctx.event_tx.clone());
 
+        // Prepare context and handler
+        let http_store = Arc::clone(&self.http);
+        let bot_user_id = Arc::new(RwLock::new(None));
         let handler = DiscordHandler {
-            event_tx: ctx.event_tx.clone(),
-            http_store: Arc::clone(&self.http),
+            buffer,
+            http_store,
             bot_user_id: Arc::clone(&bot_user_id),
         };
 

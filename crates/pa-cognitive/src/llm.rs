@@ -228,8 +228,14 @@ impl Worker for LlmWorker {
         let system_prompt = self.system_prompt.clone();
         let short_term = self.short_term.clone();
 
+        let mut active_tasks = tokio::task::JoinSet::new();
+
         loop {
             tokio::select! {
+                // Reap completed tasks to free memory
+                Some(_) = active_tasks.join_next() => {
+                    // Task finished normally or panicked, either way we just reap it
+                }
                 result = broadcast_rx.recv() => {
                     match result {
                         Ok(Event::Raw(raw)) if raw.is_mention => {
@@ -268,7 +274,7 @@ impl Worker for LlmWorker {
                             // Spawn the LLM call into a separate async task so it doesn't block
                             // the worker's broadcast event loop. This allows concurrent processing
                             // and ensures the worker can respond to shutdown signals immediately.
-                            tokio::spawn(async move {
+                            active_tasks.spawn(async move {
                                 let result = Self::call_llm(
                                     &http_client,
                                     &config,
@@ -307,6 +313,10 @@ impl Worker for LlmWorker {
                 }
             }
         }
+
+        // Abort any ongoing LLM requests so they don't try to send 
+        // down closed channels during shutdown.
+        active_tasks.abort_all();
 
         self.status = WorkerStatus::Stopped;
         info!("LLM worker stopped");
