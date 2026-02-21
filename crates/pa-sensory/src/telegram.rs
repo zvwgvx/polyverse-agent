@@ -87,19 +87,8 @@ impl Worker for TelegramWorker {
                             let chat_id: i64 =
                                 response.channel_id.parse().unwrap_or_default();
 
-                            // Reply to the original message if we have the ID
-                            let mut req = bot_clone
+                            let req = bot_clone
                                 .send_message(ChatId(chat_id), &response.content);
-
-                            if let Some(ref reply_id) = response.reply_to_message_id {
-                                if let Ok(msg_id) = reply_id.parse::<i32>() {
-                                    req = req.reply_parameters(
-                                        teloxide::types::ReplyParameters::new(
-                                            teloxide::types::MessageId(msg_id),
-                                        ),
-                                    );
-                                }
-                            }
 
                             match req.await {
                                 Ok(_) => {
@@ -135,6 +124,11 @@ impl Worker for TelegramWorker {
                   buffer: crate::buffer::SensoryBuffer,
                   bot_un: String| async move {
                 if let Some(text) = msg.text() {
+                    // Ignore telegram commands like /start
+                    if text.starts_with('/') {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+
                     let user = msg
                         .from
                         .as_ref()

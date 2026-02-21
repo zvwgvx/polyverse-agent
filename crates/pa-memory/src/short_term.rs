@@ -28,9 +28,9 @@ impl Session {
     /// Check if session has timed out based on adaptive timeout.
     fn is_expired(&self, now: DateTime<Utc>, base_timeout_secs: i64) -> bool {
         // Adaptive timeout: longer conversations get more grace period
-        // base + (message_count * 2 min), capped at 90 min
+        // base + (message_count * 1 min), capped at 90 min
         let adaptive_secs = base_timeout_secs
-            + (self.messages.len() as i64 * 120)
+            + (self.messages.len() as i64 * 60)
                 .min(90 * 60 - base_timeout_secs);
 
         let elapsed = now - self.last_active;
@@ -50,7 +50,7 @@ pub struct ShortTermConfig {
 impl Default for ShortTermConfig {
     fn default() -> Self {
         Self {
-            base_timeout_secs: 30 * 60, // 30 minutes
+            base_timeout_secs: 20 * 60, // 20 minutes
             max_prompt_messages: 20,
         }
     }

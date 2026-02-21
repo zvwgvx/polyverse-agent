@@ -76,20 +76,30 @@ impl MemoryWorker {
         embedder: Arc<MemoryEmbedder>,
         episodic: Arc<EpisodicStore>,
     ) {
-        if messages.is_empty() {
+        if messages.len() < 3 {
+            debug!(count = messages.len(), "Session too short, ignoring semantic compression.");
             return;
         }
         
         tokio::spawn(async move {
             let session_id = uuid::Uuid::new_v4().to_string();
             
-            let mut transcript = String::new();
+            let base_persona = tokio::fs::read_to_string("instruct.txt")
+                .await
+                .unwrap_or_else(|_| "Mày là Ryuuko.".to_string());
+
+            let mut formatted_msgs = Vec::new();
             for msg in &messages {
                 let speaker = if msg.is_bot_response { "Ryuuko" } else { &msg.username };
-                transcript.push_str(&format!("{}: {}\n", speaker, msg.content));
+                formatted_msgs.push(format!("[{}]: {}", speaker, msg.content));
             }
+            
+            let chat_log_doc = format!(
+                "=== BẮT ĐẦU LOG CHAT ===\n{}\n=== KẾT THÚC LOG CHAT ===",
+                formatted_msgs.join("\n")
+            );
 
-            match compressor.compress(&transcript).await {
+            match compressor.compress(&base_persona, &chat_log_doc).await {
                 Ok(Some(compression)) => {
                     info!(
                         session_id = %session_id,

@@ -129,13 +129,13 @@ fn load_config() -> Result<Config> {
     }
 
     // LLM env overrides
-    if let Ok(base) = std::env::var("OPENAI_API_BASE") {
+    if let Ok(base) = std::env::var("API_BASE") {
         config.llm.api_base = base;
     }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+    if let Ok(key) = std::env::var("API_KEY") {
         config.llm.api_key = key;
     }
-    if let Ok(model) = std::env::var("OPENAI_MODEL") {
+    if let Ok(model) = std::env::var("MODEL") {
         config.llm.model = model;
     }
 
@@ -221,10 +221,16 @@ async fn main() -> Result<()> {
     info!("Registered Memory worker");
 
     // Register LLM worker
+    let chat_max_tokens = std::env::var("CHAT_MAX_TOKENS")
+        .unwrap_or_else(|_| "2048".to_string())
+        .parse::<u32>()
+        .unwrap_or(2048);
+
     let llm_config = LlmConfig {
         api_base: config.llm.api_base.clone(),
         api_key: config.llm.api_key.clone(),
         model: config.llm.model.clone(),
+        chat_max_tokens,
     };
 
     if llm_config.is_valid() {
@@ -241,7 +247,7 @@ async fn main() -> Result<()> {
         );
         worker_count += 1;
     } else {
-        warn!("LLM not configured (set OPENAI_API_BASE, OPENAI_API_KEY, OPENAI_MODEL in .env)");
+        warn!("LLM not configured (set API_BASE, API_KEY, MODEL in .env)");
     }
 
     if worker_count == 0 {

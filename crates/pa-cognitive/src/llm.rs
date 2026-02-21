@@ -29,6 +29,8 @@ pub struct LlmConfig {
     pub api_key: String,
     /// Model name to use (e.g. "gpt-4o-mini")
     pub model: String,
+    /// Maximum tokens for chat completions
+    pub chat_max_tokens: u32,
 }
 
 impl LlmConfig {
@@ -425,12 +427,24 @@ impl LlmWorker {
             }
         }
 
+        // --- Format Current Time for Context ---
+        let now = chrono::Utc::now();
+        let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+        let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());
+        let time_context = format!(
+            "📅 [THỜI GIAN THỰC TẾ]:\n- Giờ chuẩn (UTC/GMT): {}\n- Giờ của mày (Singapore GMT+8): {}\n- Giờ của User (Việt Nam GMT+7): {}\n",
+            now.format("%d/%m/%Y %H:%M:%S"),
+            sg_time.format("%d/%m/%Y %H:%M:%S"),
+            vn_time.format("%d/%m/%Y %H:%M:%S")
+        );
+
         // --- Standard Preamble & History ---
-        let preamble = if history.is_empty() {
-            format!(
+        let mut preamble = time_context;
+        if history.is_empty() {
+            preamble.push_str(&format!(
                 "[context: đây là tin nhắn đầu tiên từ {}. mày chưa biết người này — đây là người lạ.]",
                 current_username
-            )
+            ));
         } else {
             let users: Vec<&str> = history
                 .iter()
@@ -439,11 +453,11 @@ impl LlmWorker {
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
                 .collect();
-            format!(
+            preamble.push_str(&format!(
                 "[context: đã có {} tin nhắn trước đó trong cuộc hội thoại này. người tham gia: {}. hãy trả lời dựa trên mạch hội thoại ở trên.]",
                 history.len(),
                 users.join(", ")
-            )
+            ));
         };
         messages.push(ChatMessage {
             role: "system".to_string(),
@@ -471,10 +485,10 @@ impl LlmWorker {
             model: config.model.clone(),
             messages,
             temperature: Some(0.7),
-            max_tokens: Some(2048),
+            max_tokens: Some(config.chat_max_tokens),
             stream: Some(true),
             reasoning: Some(ReasoningConfig {
-                effort: "high".to_string(),
+                effort: "low".to_string(),
             }),
             provider: Some(ProviderConfig {
                 order: Some(vec!["Google AI Studio".to_string()]),
@@ -509,6 +523,7 @@ impl LlmWorker {
         let mut output_buffer = String::new();
         let mut is_thinking = false;
         let mut full_response_buffer = String::new();
+        let mut is_first_chunk = true;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.context("Failed to read stream chunk")?;
@@ -561,12 +576,13 @@ impl LlmWorker {
                                             let event = Event::Response(ResponseEvent {
                                                 platform: raw_event.platform,
                                                 channel_id: raw_event.channel_id.clone(),
-                                                reply_to_message_id: Some(raw_event.message_id.clone()),
+                                                reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
                                                 reply_to_user: Some(raw_event.username.clone()),
                                                 is_dm: raw_event.is_dm,
                                                 content: msg,
                                                 source: ResponseSource::CloudLLM,
                                             });
+                                            is_first_chunk = false;
                                             if let Err(e) = event_tx.send(event).await {
                                                 tracing::error!("Failed to send stream line event: {}", e);
                                             }
@@ -591,12 +607,13 @@ impl LlmWorker {
             let event = Event::Response(ResponseEvent {
                 platform: raw_event.platform,
                 channel_id: raw_event.channel_id.clone(),
-                reply_to_message_id: Some(raw_event.message_id.clone()),
+                reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
                 reply_to_user: Some(raw_event.username.clone()),
                 is_dm: raw_event.is_dm,
                 content: final_msg,
                 source: ResponseSource::CloudLLM,
             });
+            is_first_chunk = false;
             if let Err(e) = event_tx.send(event).await {
                 tracing::error!("Failed to send stream final line event: {}", e);
             }
