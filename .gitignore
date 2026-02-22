@@ -36,3 +36,4 @@ Icon
 # Cache
 .cache/
 .npm/
+.fastembed_cache

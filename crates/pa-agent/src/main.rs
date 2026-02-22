@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::Result;
 use serde::Deserialize;
 use tracing::{error, info, warn};

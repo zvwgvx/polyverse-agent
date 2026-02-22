@@ -32,6 +32,7 @@ impl BufferKey {
 /// The Sensory Buffer acts as a debounce layer to prevent context fragmentation.
 /// It catches raw events and groups them by user/channel within a sliding 3-second window.
 #[derive(Clone)]
+#[repr(align(64))] // Tối ưu hoá cực mạnh: Căn lề L1 cache line 64bytes để chống False Sharing giữa các CPU thread
 pub struct SensoryBuffer {
     /// Maps a session to an active tokio task's sender channel
     active_sessions: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<BufferMsg>>>>,

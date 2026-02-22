@@ -21,3 +21,4 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 dotenvy = { workspace = true }
+mimalloc = "0.1.48"
