@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Platform {
     Discord,
+    DiscordSelfbot,
     Telegram,
     Cli,
 }
@@ -13,6 +14,7 @@ impl std::fmt::Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Platform::Discord => write!(f, "Discord"),
+            Platform::DiscordSelfbot => write!(f, "DiscordSelfbot"),
             Platform::Telegram => write!(f, "Telegram"),
             Platform::Cli => write!(f, "CLI"),
         }

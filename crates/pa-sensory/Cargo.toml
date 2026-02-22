@@ -13,3 +13,7 @@ tracing = { workspace = true }
 serenity = { workspace = true }
 teloxide = { workspace = true }
 chrono = { workspace = true }
+tokio-tungstenite = "0.28.0"
+futures-util = "0.3.32"
+serde.workspace = true
+serde_json.workspace = true

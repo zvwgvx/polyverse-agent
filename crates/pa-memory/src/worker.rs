@@ -170,7 +170,7 @@ impl Worker for MemoryWorker {
 
         let episodic = Arc::clone(self.episodic.as_ref().expect("EpisodicStore not initialized"));
         let embedder = Arc::clone(self.embedder.as_ref().expect("MemoryEmbedder not initialized"));
-        let compressor = Arc::clone(self.compressor.as_ref().expect("SemanticCompressor not initialized"));
+        let compressor = self.compressor.clone();
 
         let mut broadcast_rx = ctx.subscribe_events();
         let mut shutdown_rx = ctx.subscribe_shutdown();
@@ -221,12 +221,14 @@ impl Worker for MemoryWorker {
                                     error!(error = %e, "Failed to persist expired session");
                                 }
                                 
-                                Self::ingest_session(
-                                    expired_msgs,
-                                    Arc::clone(&compressor),
-                                    Arc::clone(&embedder),
-                                    Arc::clone(&episodic),
-                                );
+                                if let Some(comp) = &compressor {
+                                    Self::ingest_session(
+                                        expired_msgs,
+                                        Arc::clone(comp),
+                                        Arc::clone(&embedder),
+                                        Arc::clone(&episodic),
+                                    );
+                                }
                             }
                         }
                         Ok(Event::BotTurnCompletion(complete)) => {
@@ -278,12 +280,14 @@ impl Worker for MemoryWorker {
                             error!(error = %e, "Failed to persist flushed session");
                         }
                         
-                        Self::ingest_session(
-                            messages,
-                            Arc::clone(&compressor),
-                            Arc::clone(&embedder),
-                            Arc::clone(&episodic),
-                        );
+                        if let Some(comp) = &compressor {
+                            Self::ingest_session(
+                                messages,
+                                Arc::clone(comp),
+                                Arc::clone(&embedder),
+                                Arc::clone(&episodic),
+                            );
+                        }
                     }
                 }
                 _ = shutdown_rx.recv() => {

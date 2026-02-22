@@ -51,10 +51,10 @@ dotenvy = "0.15"
 # ─── Release Profiles ────────────────────────────────────────
 
 # `cargo run --release` / `cargo build --release`
-# Maximum performance for production use.
+# Tối ưu hoá cực mạnh biên dịch
 [profile.release]
 opt-level = 3         # full optimization
-lto = "thin"          # cross-crate optimization (faster than "fat", better than false)
+lto = "fat"           # MAX cross-crate optimization
 codegen-units = 1     # single codegen unit — best inlining/optimization
 panic = "abort"       # no unwinding overhead; smaller binary
 strip = "symbols"     # strip debug symbols for smaller binary

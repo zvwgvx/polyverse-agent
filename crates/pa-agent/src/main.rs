@@ -6,7 +6,7 @@ use tracing_subscriber::EnvFilter;
 use pa_cognitive::{LlmConfig, LlmWorker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
-use pa_sensory::{DiscordWorker, TelegramWorker};
+use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
 
 // ─── Configuration ───────────────────────────────────────────
 
@@ -15,7 +15,9 @@ use pa_sensory::{DiscordWorker, TelegramWorker};
 #[derive(Debug, Deserialize)]
 struct Config {
     #[serde(default)]
-    discord: DiscordConfig,
+    discord_bot: DiscordBotConfig,
+    #[serde(default)]
+    discord_selfbot: DiscordSelfbotConfig,
     #[serde(default)]
     telegram: TelegramConfig,
     #[serde(default)]
@@ -25,7 +27,15 @@ struct Config {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct DiscordConfig {
+struct DiscordBotConfig {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DiscordSelfbotConfig {
     #[serde(default)]
     token: String,
     #[serde(default)]
@@ -101,7 +111,8 @@ fn load_config() -> Result<Config> {
         toml::from_str(&content)?
     } else {
         Config {
-            discord: DiscordConfig::default(),
+            discord_bot: DiscordBotConfig::default(),
+            discord_selfbot: DiscordSelfbotConfig::default(),
             telegram: TelegramConfig::default(),
             agent: AgentConfig::default(),
             llm: LlmFileConfig::default(),
@@ -110,9 +121,14 @@ fn load_config() -> Result<Config> {
 
     // Step 3: Environment variables OVERRIDE config.toml values
 
-    if let Ok(token) = std::env::var("DISCORD_TOKEN") {
-        config.discord.token = token;
-        config.discord.enabled = true;
+    if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
+        config.discord_bot.token = token;
+        config.discord_bot.enabled = true;
+    }
+
+    if let Ok(token) = std::env::var("DISCORD_SELFBOT_TOKEN") {
+        config.discord_selfbot.token = token;
+        config.discord_selfbot.enabled = true;
     }
 
     if let Ok(token) = std::env::var("TELEGRAM_TOKEN") {
@@ -150,8 +166,9 @@ async fn main() -> Result<()> {
     let config = load_config()?;
 
     // Initialize tracing/logging
+    let default_filter = format!("{},ort=warn,fastembed=warn,lance=warn", config.agent.log_level);
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.agent.log_level));
+        .unwrap_or_else(|_| EnvFilter::new(default_filter));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
@@ -169,12 +186,18 @@ async fn main() -> Result<()> {
     // Register sensory workers based on config
     let mut worker_count = 0;
 
-    if config.discord.enabled && !config.discord.token.is_empty() {
-        info!("Registering Discord worker");
-        supervisor.register(DiscordWorker::new(config.discord.token.clone()));
+    if config.discord_bot.enabled && !config.discord_bot.token.is_empty() {
+        info!("Registering Discord Bot worker");
+        supervisor.register(DiscordWorker::new(config.discord_bot.token.clone()));
         worker_count += 1;
-    } else if config.discord.enabled {
-        warn!("Discord enabled but no token provided (set DISCORD_TOKEN in .env)");
+    } else if config.discord_bot.enabled {
+        warn!("Discord Bot enabled but no token provided (set DISCORD_BOT_TOKEN in .env)");
+    }
+
+    if config.discord_selfbot.enabled {
+        info!("Registering Discord Selfbot Websocket worker");
+        supervisor.register(SelfbotWsWorker::new(9000));
+        worker_count += 1;
     }
 
     if config.telegram.enabled && !config.telegram.token.is_empty() {

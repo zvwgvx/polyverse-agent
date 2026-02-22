@@ -432,7 +432,7 @@ impl LlmWorker {
         let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
         let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());
         let time_context = format!(
-            "📅 [THỜI GIAN THỰC TẾ]:\n- Giờ chuẩn (UTC/GMT): {}\n- Giờ của mày (Singapore GMT+8): {}\n- Giờ của User (Việt Nam GMT+7): {}\n",
+            "[NOW]: UTC: {} | Ryuuko(GMT+8): {} | User(GMT+7): {}\n",
             now.format("%d/%m/%Y %H:%M:%S"),
             sg_time.format("%d/%m/%Y %H:%M:%S"),
             vn_time.format("%d/%m/%Y %H:%M:%S")
