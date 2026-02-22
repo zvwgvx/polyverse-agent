@@ -20,13 +20,6 @@ Thumbs.db
 instruct.txt
 instruct.txt.sample
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
 # Mac OS
 .AppleDouble
 .LSOverride
