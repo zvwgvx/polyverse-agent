@@ -140,6 +140,7 @@ mod tests {
             username: "user".to_string(),
             content: "hello".to_string(),
             is_mention: false,
+            is_dm: false,
             timestamp: chrono::Utc::now(),
         });
 

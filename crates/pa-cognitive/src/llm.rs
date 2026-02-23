@@ -16,7 +16,11 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
-use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder};
+use pa_memory::{
+    episodic::EpisodicStore, 
+    embedder::MemoryEmbedder,
+    graph::CognitiveGraph,
+};
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -117,6 +121,8 @@ pub struct LlmWorker {
     pub episodic: Option<Arc<EpisodicStore>>,
     /// Shared handle to Memory Embedder to vectorize user queries.
     pub embedder: Option<Arc<MemoryEmbedder>>,
+    /// Shared handle to the Cognitive Graph (SurrealDB)
+    pub graph: Option<CognitiveGraph>,
 }
 
 impl LlmWorker {
@@ -134,6 +140,7 @@ impl LlmWorker {
             short_term: None,
             episodic: None,
             embedder: None,
+            graph: None,
         }
     }
 
@@ -152,6 +159,12 @@ impl LlmWorker {
     /// Attach a shared embedder handle.
     pub fn with_embedder(mut self, embedder: Arc<MemoryEmbedder>) -> Self {
         self.embedder = Some(embedder);
+        self
+    }
+
+    /// Attach a shared cognitive graph handle.
+    pub fn with_graph(mut self, graph: CognitiveGraph) -> Self {
+        self.graph = Some(graph);
         self
     }
 
@@ -255,6 +268,7 @@ impl Worker for LlmWorker {
         let short_term = self.short_term.clone();
         let episodic = self.episodic.clone();
         let embedder = self.embedder.clone();
+        let graph = self.graph.clone();
 
         let mut active_tasks = tokio::task::JoinSet::new();
 
@@ -297,6 +311,7 @@ impl Worker for LlmWorker {
                             let sys = system_prompt.clone();
                             let ep = episodic.clone();
                             let emb = embedder.clone();
+                            let g = graph.clone();
                             let tx = event_tx.clone();
                             let raw_clone = raw.clone();
                             let username = raw_clone.username.clone(); // Use raw_clone for username
@@ -312,6 +327,7 @@ impl Worker for LlmWorker {
                                     history,
                                     ep.expect("Episodic store not initialized").clone(),
                                     emb.expect("Embedder not initialized").clone(),
+                                    g.expect("Graph not initialized").clone(),
                                     &username,
                                     &raw_clone,
                                     &tx,
@@ -375,6 +391,7 @@ impl LlmWorker {
         history: Vec<(String, String, String)>,
         episodic: Arc<EpisodicStore>,
         embedder: Arc<MemoryEmbedder>,
+        graph: CognitiveGraph,
         current_username: &str,
         raw_event: &pa_core::event::RawEvent,
         event_tx: &tokio::sync::mpsc::Sender<Event>,
@@ -424,6 +441,57 @@ impl LlmWorker {
                     });
                 }
                 _ => {} // No events found or error searching
+            }
+        }
+
+        // --- Cognitive Graph (System 2 Social Context) ---
+        match graph.get_social_context(current_username).await {
+            Ok((attitudes, illusion)) => {
+                let mut social_text = format!(
+                    "### TRẠNG THÁI CẢM XÚC & QUAN HỆ VỚI {}:\n", 
+                    current_username
+                );
+                
+                social_text.push_str(&format!(
+                    "- Mức độ Hảo cảm (Affinity): {:.2} (-1 ghét tởm, 1 yêu quý)\n",
+                    attitudes.affinity
+                ));
+                social_text.push_str(&format!(
+                    "- Độ thân thiết/Bám dính (Attachment): {:.2} (-1 né tránh, 1 bám lấy)\n",
+                    attitudes.attachment
+                ));
+                social_text.push_str(&format!(
+                    "- Niềm tin (Trust): {:.2} (-1 nghi ngờ, 1 tin tưởng tuyệt đối)\n",
+                    attitudes.trust
+                ));
+                social_text.push_str(&format!(
+                    "- Cảm giác An toàn (Safety): {:.2} (-1 sợ hãi/deft, 1 an tâm)\n",
+                    attitudes.safety
+                ));
+                social_text.push_str(&format!(
+                    "- Độ căng thẳng (Tension): {:.2} (0 thoải mái, 1 áp lực/tức giận)\n\n",
+                    attitudes.tension
+                ));
+                
+                social_text.push_str(&format!(
+                    "Lưu ý: Bạn (Ryuuko) đang có ảo tưởng rằng {} cảm nhận về bạn như sau:\n",
+                    current_username
+                ));
+                social_text.push_str(&format!(
+                    "- Họ thích/ghét bạn: {:.2} | Họ tin bạn: {:.2} | Căng thẳng: {:.2}\n",
+                    illusion.affinity, illusion.trust, illusion.tension
+                ));
+                
+                social_text.push_str("=> HÃY DÙNG CHÍNH ĐÚNG CẢM XÚC NÀY ĐỂ TRẢ LỜI (nếu thân thì vòi vĩnh, nếu ghét thì chửi/lạnh nhạt, nếu căng thẳng thì cáu gắt). ĐỪNG LỘ RA CÁC CON SỐ!\n");
+
+                messages.push(ChatMessage {
+                    role: "system".to_string(),
+                    content: social_text,
+                    name: None,
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to retrieve social context for {}: {}", current_username, e);
             }
         }
 

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use pa_cognitive::{LlmConfig, LlmWorker};
+use pa_cognitive::{LlmConfig, LlmWorker, System1Config, System1Worker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
@@ -147,14 +147,14 @@ fn load_config() -> Result<Config> {
         config.agent.log_level = level;
     }
 
-    // LLM env overrides
-    if let Ok(base) = std::env::var("API_BASE") {
+    // LLM env overrides (SYS2 is the Conscious Roleplay model)
+    if let Ok(base) = std::env::var("SYS2_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")) {
         config.llm.api_base = base;
     }
-    if let Ok(key) = std::env::var("API_KEY") {
+    if let Ok(key) = std::env::var("SYS2_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")) {
         config.llm.api_key = key;
     }
-    if let Ok(model) = std::env::var("MODEL") {
+    if let Ok(model) = std::env::var("SYS2_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")).or_else(|_| std::env::var("MODEL")) {
         config.llm.model = model;
     }
 
@@ -228,6 +228,9 @@ async fn main() -> Result<()> {
     let embedder = Arc::new(MemoryEmbedder::new()?);
     let compressor_opt = SemanticCompressor::new().ok().map(Arc::new);
 
+    info!("Initializing SurrealDB Cognitive Graph...");
+    let cognitive_graph = pa_memory::graph::CognitiveGraph::new("data/ryuuko_graph").await?;
+
     if compressor_opt.is_none() {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
     }
@@ -267,13 +270,41 @@ async fn main() -> Result<()> {
         );
         supervisor.register(
             LlmWorker::new(llm_config)
-                .with_memory(short_term_handle)
+                .with_memory(Arc::clone(&short_term_handle))
                 .with_episodic(Arc::clone(&episodic))
                 .with_embedder(Arc::clone(&embedder)),
         );
         worker_count += 1;
     } else {
         warn!("LLM not configured (set API_BASE, API_KEY, MODEL in .env)");
+    }
+
+    // Register System 1 Evaluator
+    if let (Ok(base), Ok(key), Ok(model)) = (
+        std::env::var("SYS1_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")),
+        std::env::var("SYS1_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")),
+        std::env::var("SYS1_MODEL")
+    ) {
+        let sys1_config = System1Config {
+            api_base: base,
+            api_key: key,
+            model,
+        };
+        if sys1_config.is_valid() {
+            info!(
+                api_base = %sys1_config.api_base,
+                model = %sys1_config.model,
+                "Registering System 1 JSON Evaluator"
+            );
+            supervisor.register(System1Worker::new(
+                sys1_config,
+                cognitive_graph.clone(),
+                Arc::clone(&short_term_handle),
+            ));
+            worker_count += 1;
+        }
+    } else {
+        warn!("System 1 not configured (set SYS1_API_BASE, SYS1_API_KEY, SYS1_MODEL in .env)");
     }
 
     if worker_count == 0 {

@@ -5,6 +5,7 @@ pub mod worker;
 pub mod episodic;
 pub mod embedder;
 pub mod compressor;
+pub mod graph;
 
 pub use short_term::ShortTermMemory;
 pub use store::MemoryStore;

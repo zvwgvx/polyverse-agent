@@ -355,6 +355,7 @@ mod tests {
             username: user.to_string(),
             content: content.to_string(),
             is_mention,
+            reply_to_user: None,
             is_bot_response: false,
             timestamp: Utc::now(),
             importance: if is_mention { 0.7 } else { 0.3 },

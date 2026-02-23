@@ -165,6 +165,7 @@ mod tests {
             username: "TestUser".to_string(),
             content: "Hello Ryuuko!".to_string(),
             is_mention: true,
+            is_dm: false,
             timestamp: Utc::now(),
         };
 
