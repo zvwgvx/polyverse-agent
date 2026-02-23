@@ -166,6 +166,21 @@ impl CognitiveGraph {
         Ok(())
     }
     
+    /// Update Ryuuko's observation of dynamics between two people (U1 -> U2)
+    pub async fn update_observed_dynamic(&self, from_user: &str, to_user: &str, tension: f32) -> Result<()> {
+         let query = format!(r#"
+            RELATE person:{}->interacts_with->person:{} 
+            SET 
+                tension = math::clamp((tension OR 0.0) + $tension, -1.0, 1.0);
+        "#, from_user, to_user);
+        
+        let _response = self.db.query(&query)
+            .bind(("tension", tension))
+            .await?;
+            
+        Ok(())
+    }
+    
     /// Extract context for System 1 (Frontline Roleplay)
     pub async fn get_social_context(&self, user_id: &str) -> Result<(AttitudesTowards, IllusionOf)> {
         let query = format!(r#"

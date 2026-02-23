@@ -45,9 +45,17 @@ struct ChatMessage {
 #[derive(Debug, Deserialize)]
 struct System1ResponseFormat {
     internal_monologue: String,
-    social_delta: Option<SocialDeltaReq>,
-    emotion_delta: Option<EmotionDeltaReq>,
-    target_entity: Option<String>,
+    social_updates: Vec<SocialTargetUpdate>,
+    observed_dynamics: Option<Vec<ObservedDynamic>>,
+    entity_updates: Option<Vec<EntityUpdate>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SocialTargetUpdate {
+    target_user: String,
+    role: String,
+    actual_perception_delta: SocialDeltaReq,
+    projected_illusion_delta: Option<IllusionDeltaReq>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +68,26 @@ struct SocialDeltaReq {
 }
 
 #[derive(Debug, Deserialize)]
-struct EmotionDeltaReq {
+struct IllusionDeltaReq {
+    expected_delta_affinity: f32,
+    expected_delta_attachment: f32,
+    expected_delta_trust: f32,
+    expected_delta_safety: f32,
+    expected_delta_tension: f32,
+    reasoning: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ObservedDynamic {
+    from_user: String,
+    to_user: String,
+    observation: String,
+    estimated_tension: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct EntityUpdate {
+    entity_name: String,
     delta_preference: f32,
     delta_stress: f32,
     delta_fascination: f32,
@@ -94,24 +121,53 @@ impl System1Worker {
 
     fn build_system_prompt(&self) -> String {
         r#"Mày là Hệ thống 1 (Trực giác Bản năng) của Ryuuko.
-Nhiệm vụ của mày: Đánh giá Nhanh chóng một đoạn chat log (giữa user và Ryuuko), để trích xuất CẢM XÚC THỰC SỰ của Ryuuko (internal_monologue) và TÁC ĐỘNG TỚI ĐỘ THÂN THIẾT (delta).
+Nhiệm vụ của mày: Đánh giá Nhanh chóng một đoạn chat log, quét toàn bộ mọi thực thể xuất hiện trong đoạn chat để trích xuất CẢM XÚC THỰC SỰ của Ryuuko (internal_monologue) và TÁC ĐỘNG TỚI ĐỘ THÂN THIẾT (delta) lên nhiều mục tiêu cùng lúc.
 Phải dùng ngôn ngữ của Gen Z Việt Nam (chửi rủa, tục tĩu thoải mái, cực kỳ thật).
 
 Trả về STRICT JSON với cấu trúc sau:
 {
   "internal_monologue": "những gì Ryuuko đang nghĩ trong đầu (VD: đm thằng này nói chuyện hãm thế, hoặc ôi dễ thương vãi~)",
-  "social_delta": {
-    "delta_affinity": f32,  // Thích (0.1), Ghét (-0.1)
-    "delta_attachment": f32, // Bám dính (0.1), Rời xa (-0.1)
-    "delta_trust": f32,      // Tin tưởng (0.1), Nghi ngờ (-0.1)
-    "delta_safety": f32,     // An toàn (0.1), Nguy hiểm (-0.1)
-    "delta_tension": f32     // Căng thẳng (0.1), Thoải mái (-0.1)
-  },
-  "emotion_delta": null,
-  "target_entity": null
+  "social_updates": [
+    {
+      "target_user": "Tên user",
+      "role": "chat_partner hoặc mentioned_person",
+      "actual_perception_delta": {
+        "delta_affinity": f32,
+        "delta_attachment": f32,
+        "delta_trust": f32,
+        "delta_safety": f32,
+        "delta_tension": f32
+      },
+      "projected_illusion_delta": {
+        "expected_delta_affinity": f32,
+        "expected_delta_attachment": f32,
+        "expected_delta_trust": f32,
+        "expected_delta_safety": f32,
+        "expected_delta_tension": f32,
+        "reasoning": "Lý do ảo tưởng"
+      }
+    }
+  ],
+  "observed_dynamics": [ 
+    {
+      "from_user": "Tên",
+      "to_user": "Tên",
+      "observation": "Nhận xét",
+      "estimated_tension": f32
+    }
+  ],
+  "entity_updates": [ 
+    {
+      "entity_name": "Tên sự vật/chủ đề",
+      "delta_preference": f32,
+      "delta_stress": f32,
+      "delta_fascination": f32
+    }
+  ]
 }
 
 Giá trị delta dao động từ -0.5 đến +0.5. Đa số thời gian nên để giá trị nhỏ (-0.05, 0.05).
+Trường projected_illusion_delta có thể null nếu role là mentioned_person. Các mảng observed_dynamics và entity_updates có thể null hoặc rỗng nếu không có.
 Không sinh ra bất kỳ văn bản nào ngoài JSON Object này."#.to_string()
     }
 }
@@ -271,20 +327,62 @@ impl System1Worker {
         match parsed {
             Ok(data) => {
                 info!("System 1 Monologue: {}", data.internal_monologue);
-                if let Some(social) = data.social_delta {
+                
+                // Process social updates (R -> U and U -> R)
+                for social in data.social_updates {
                     let s_delta = SocialDelta {
-                        delta_affinity: social.delta_affinity,
-                        delta_attachment: social.delta_attachment,
-                        delta_trust: social.delta_trust,
-                        delta_safety: social.delta_safety,
-                        delta_tension: social.delta_tension,
+                        delta_affinity: social.actual_perception_delta.delta_affinity,
+                        delta_attachment: social.actual_perception_delta.delta_attachment,
+                        delta_trust: social.actual_perception_delta.delta_trust,
+                        delta_safety: social.actual_perception_delta.delta_safety,
+                        delta_tension: social.actual_perception_delta.delta_tension,
                     };
-                    if let Err(e) = graph.update_social_graph(user_id, s_delta).await {
-                        error!("Failed to update social graph: {}", e);
-                    } else {
-                        debug!("Social graph updated successfully via System 1");
+                    
+                    if let Err(e) = graph.update_social_graph(&social.target_user, s_delta).await {
+                        error!("Failed to update social graph for {}: {}", social.target_user, e);
+                    }
+                    
+                    if social.role == "chat_partner" {
+                        if let Some(illusion) = social.projected_illusion_delta {
+                            let i_delta = SocialDelta {
+                                delta_affinity: illusion.expected_delta_affinity,
+                                delta_attachment: illusion.expected_delta_attachment,
+                                delta_trust: illusion.expected_delta_trust,
+                                delta_safety: illusion.expected_delta_safety,
+                                delta_tension: illusion.expected_delta_tension,
+                            };
+                            if let Err(e) = graph.update_illusion_graph(&social.target_user, i_delta).await {
+                                error!("Failed to update illusion graph for {}: {}", social.target_user, e);
+                            }
+                        }
                     }
                 }
+                
+                // Process observed dynamics (U1 -> U2)
+                if let Some(dynamics) = data.observed_dynamics {
+                    for dyn_update in dynamics {
+                        if let Err(e) = graph.update_observed_dynamic(&dyn_update.from_user, &dyn_update.to_user, dyn_update.estimated_tension).await {
+                            error!("Failed to update observed dynamics: {}", e);
+                        }
+                    }
+                }
+                
+                // Process entity updates (R -> E)
+                if let Some(entities) = data.entity_updates {
+                    for entity in entities {
+                        let e_delta = EmotionDelta {
+                            entity_name: entity.entity_name.clone(),
+                            delta_preference: entity.delta_preference,
+                            delta_stress: entity.delta_stress,
+                            delta_fascination: entity.delta_fascination,
+                        };
+                        if let Err(e) = graph.update_emotion_graph(&entity.entity_name, e_delta).await {
+                            error!("Failed to update emotion graph for {}: {}", entity.entity_name, e);
+                        }
+                    }
+                }
+                
+                debug!("Multi-target Graph updated successfully via System 1");
             }
             Err(e) => {
                 warn!("System 1 JSON parse error: {}\nContent: {}", e, clean_json);
