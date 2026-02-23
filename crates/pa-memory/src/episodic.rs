@@ -171,6 +171,25 @@ impl EpisodicStore {
         // Take top K
         Ok(candidates.into_iter().take(limit).map(|(event, _)| event).collect())
     }
+
+    /// Count total memory chunks stored for a specific user
+    pub async fn count_user_chunks(&self, username: &str) -> Result<usize> {
+        let filter_expr = format!("metadata LIKE '%\"username\":\"{}\"%'", username);
+        let mut stream = self.table
+            .query()
+            .only_if(filter_expr)
+            .execute()
+            .await?;
+            
+        let mut count = 0;
+        while let Some(batch_res) = stream.next().await {
+            if let Ok(batch) = batch_res {
+                count += batch.num_rows();
+            }
+        }
+        
+        Ok(count)
+    }
 }
 
 fn calculate_final_score(distance: f32, timestamp: i64, importance: f32, now: i64, lambda: f32) -> f32 {

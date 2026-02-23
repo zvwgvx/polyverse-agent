@@ -103,15 +103,17 @@ pub struct EmotionDelta {
 impl CognitiveGraph {
     /// Update Ryuuko's attitude towards a User (R -> U) using clamped Delta Accumulation
     pub async fn update_social_graph(&self, user_id: &str, delta: SocialDelta) -> Result<()> {
+        let edge_id = format!("ryuuko_{}", user_id.replace(['`', '"', '\''], ""));
         let query = format!(r#"
-            RELATE person:ryuuko->attitudes_towards->person:{} 
-            SET 
+            UPDATE attitudes_towards:`{}` SET 
+                in = person:ryuuko,
+                out = person:`{}`,
                 affinity = math::clamp((affinity OR 0.0) + $delta_affinity, -1.0, 1.0),
                 attachment = math::clamp((attachment OR 0.0) + $delta_attachment, -1.0, 1.0),
                 trust = math::clamp((trust OR 0.0) + $delta_trust, -1.0, 1.0),
                 safety = math::clamp((safety OR 0.0) + $delta_safety, -1.0, 1.0),
                 tension = math::clamp((tension OR 0.0) + $delta_tension, -1.0, 1.0);
-        "#, user_id);
+        "#, edge_id, user_id);
         
         let _response = self.db.query(&query)
             .bind(("delta_affinity", delta.delta_affinity))
@@ -126,15 +128,17 @@ impl CognitiveGraph {
     
     /// Update Ryuuko's projection of how User perceives her (U -> R)
     pub async fn update_illusion_graph(&self, user_id: &str, delta: SocialDelta) -> Result<()> {
-         let query = format!(r#"
-            RELATE person:{}->illusion_of->person:ryuuko 
-            SET 
+        let edge_id = format!("{}_ryuuko", user_id.replace(['`', '"', '\''], ""));
+        let query = format!(r#"
+            UPDATE illusion_of:`{}` SET 
+                in = person:`{}`,
+                out = person:ryuuko,
                 affinity = math::clamp((affinity OR 0.0) + $delta_affinity, -1.0, 1.0),
                 attachment = math::clamp((attachment OR 0.0) + $delta_attachment, -1.0, 1.0),
                 trust = math::clamp((trust OR 0.0) + $delta_trust, -1.0, 1.0),
                 safety = math::clamp((safety OR 0.0) + $delta_safety, -1.0, 1.0),
                 tension = math::clamp((tension OR 0.0) + $delta_tension, -1.0, 1.0);
-        "#, user_id);
+        "#, edge_id, user_id);
         
         let _response = self.db.query(&query)
             .bind(("delta_affinity", delta.delta_affinity))
@@ -149,13 +153,15 @@ impl CognitiveGraph {
     
     /// Update Ryuuko's feelings towards an entity (R -> Entity)
     pub async fn update_emotion_graph(&self, entity_name: &str, delta: EmotionDelta) -> Result<()> {
-         let query = format!(r#"
-            RELATE person:ryuuko->feels_about->entity:{} 
-            SET 
+        let edge_id = format!("ryuuko_{}", entity_name.replace(['`', '"', '\''], ""));
+        let query = format!(r#"
+            UPDATE feels_about:`{}` SET 
+                in = person:ryuuko,
+                out = entity:`{}`,
                 preference = math::clamp((preference OR 0.0) + $delta_preference, -1.0, 1.0),
                 stress = math::clamp((stress OR 0.0) + $delta_stress, -1.0, 1.0),
                 fascination = math::clamp((fascination OR 0.0) + $delta_fascination, -1.0, 1.0);
-        "#, entity_name);
+        "#, edge_id, entity_name);
         
         let _response = self.db.query(&query)
             .bind(("delta_preference", delta.delta_preference))
@@ -168,11 +174,13 @@ impl CognitiveGraph {
     
     /// Update Ryuuko's observation of dynamics between two people (U1 -> U2)
     pub async fn update_observed_dynamic(&self, from_user: &str, to_user: &str, tension: f32) -> Result<()> {
-         let query = format!(r#"
-            RELATE person:{}->interacts_with->person:{} 
-            SET 
+        let edge_id = format!("{}_{}", from_user.replace(['`', '"', '\''], ""), to_user.replace(['`', '"', '\''], ""));
+        let query = format!(r#"
+            UPDATE interacts_with:`{}` SET 
+                in = person:`{}`,
+                out = person:`{}`,
                 tension = math::clamp((tension OR 0.0) + $tension, -1.0, 1.0);
-        "#, from_user, to_user);
+        "#, edge_id, from_user, to_user);
         
         let _response = self.db.query(&query)
             .bind(("tension", tension))
@@ -181,21 +189,28 @@ impl CognitiveGraph {
         Ok(())
     }
     
-    /// Extract context for System 1 (Frontline Roleplay)
     pub async fn get_social_context(&self, user_id: &str) -> Result<(AttitudesTowards, IllusionOf)> {
+        let att_edge_id = format!("ryuuko_{}", user_id.replace(['`', '"', '\''], ""));
+        let ill_edge_id = format!("{}_ryuuko", user_id.replace(['`', '"', '\''], ""));
+        
         let query = format!(r#"
-            SELECT affinity, attachment, trust, safety, tension FROM person:ryuuko->attitudes_towards WHERE out = person:{};
-            SELECT affinity, attachment, trust, safety, tension FROM person:{}->illusion_of WHERE out = person:ryuuko;
-        "#, user_id, user_id);
+            SELECT affinity, attachment, trust, safety, tension FROM attitudes_towards:`{}`;
+            SELECT affinity, attachment, trust, safety, tension FROM illusion_of:`{}`;
+        "#, att_edge_id, ill_edge_id);
         
         let mut response = self.db.query(&query).await?;
         
         let mut attitudes = AttitudesTowards::default();
         let mut illusion = IllusionOf::default();
         
-        // Helper to extract f32 or fallback to 0.0
+        // Helper to extract f32 or fallback to 0.0, handling arrays safely
         let get_f32 = |val: &serde_json::Value, key: &str| -> f32 {
-            val.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
+            let obj = if let Some(arr) = val.as_array() {
+                arr.first().unwrap_or(val)
+            } else {
+                val
+            };
+            obj.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
         };
 
         if let Ok(Some(val)) = response.take::<Option<serde_json::Value>>(0) {
@@ -240,6 +255,42 @@ mod tests {
         let extracted: Option<serde_json::Value> = response.take(1)?;
         println!("Extracted SQL Value: {:#?}", extracted);
         
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_extraction() -> Result<()> {
+        let graph = CognitiveGraph::new("memory").await?;
+        
+        // Wipe to be sure
+        graph.db.query("DELETE person; DELETE attitudes_towards;").await.unwrap();
+
+        let s_delta = SocialDelta {
+            delta_affinity: 0.25,
+            delta_attachment: 0.1,
+            delta_trust: 0.1,
+            delta_safety: 0.1,
+            delta_tension: 0.1,
+        };
+
+        // Call the exact update function
+        graph.update_social_graph("tester_upsert", s_delta.clone()).await?;
+
+        // Print raw DB contents
+        let mut raw = graph.db.query("SELECT * FROM attitudes_towards").await.unwrap();
+        let raw_val: Option<serde_json::Value> = raw.take(0).unwrap();
+        println!("RAW DB CONTENTS: {:#?}", raw_val);
+
+        // Try getting it back
+        let (attitudes, _) = graph.get_social_context("tester_upsert").await?;
+        println!("Extracted Attitudes: {:#?}", attitudes);
+
+        // Add more to test accumulation
+        graph.update_social_graph("tester_upsert", s_delta).await?;
+        let (attitudes2, _) = graph.get_social_context("tester_upsert").await?;
+        println!("Accumulated Attitudes: {:#?}", attitudes2);
+        
+        assert!(attitudes2.affinity > 0.0);
         Ok(())
     }
 }

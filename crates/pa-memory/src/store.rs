@@ -138,6 +138,7 @@ impl MemoryStore {
             let platform_str: String = row.get(1)?;
             let platform = match platform_str.as_str() {
                 "Discord" => pa_core::event::Platform::Discord,
+                "DiscordSelfbot" => pa_core::event::Platform::DiscordSelfbot,
                 "Telegram" => pa_core::event::Platform::Telegram,
                 _ => pa_core::event::Platform::Cli,
             };
@@ -164,6 +165,50 @@ impl MemoryStore {
 
         let mut messages: Vec<MemoryMessage> = rows.filter_map(|r| r.ok()).collect();
         // Reverse to get chronological order
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// Get recent messages globally (for restoring short-term on startup).
+    pub fn get_recent_all(&self, limit: usize) -> Result<Vec<MemoryMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, platform, channel_id, user_id, username, content,
+                    is_mention, is_bot_response, importance, created_at
+             FROM messages
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            let platform_str: String = row.get(1)?;
+            let platform = match platform_str.as_str() {
+                "Discord" => pa_core::event::Platform::Discord,
+                "DiscordSelfbot" => pa_core::event::Platform::DiscordSelfbot,
+                "Telegram" => pa_core::event::Platform::Telegram,
+                _ => pa_core::event::Platform::Cli,
+            };
+
+            let timestamp_str: String = row.get(9)?;
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+
+            Ok(MemoryMessage {
+                id: row.get(0)?,
+                platform,
+                channel_id: row.get(2)?,
+                user_id: row.get(3)?,
+                username: row.get(4)?,
+                content: row.get(5)?,
+                is_mention: row.get(6)?,
+                is_bot_response: row.get(7)?,
+                reply_to_user: None,
+                importance: row.get(8)?,
+                timestamp,
+            })
+        })?;
+
+        let mut messages: Vec<MemoryMessage> = rows.filter_map(|r| r.ok()).collect();
         messages.reverse();
         Ok(messages)
     }

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use pa_core::event::{Event, BotTurnCompletion, Platform};
+use pa_core::event::{Event, RawEvent, Platform};
 use pa_core::worker::{Worker, WorkerContext, WorkerStatus};
 use pa_memory::graph::{CognitiveGraph, SocialDelta, EmotionDelta};
 use pa_memory::short_term::ShortTermMemory;
+use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder};
 use pa_memory::types::ConversationKey;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -101,14 +102,26 @@ pub struct System1Worker {
     http_client: Client,
     pub graph: CognitiveGraph,
     pub short_term: Arc<Mutex<ShortTermMemory>>,
+    pub persona_prompt: String,
+    pub episodic: Option<Arc<EpisodicStore>>,
+    pub embedder: Option<Arc<MemoryEmbedder>>,
 }
 
 impl System1Worker {
-    pub fn new(config: System1Config, graph: CognitiveGraph, short_term: Arc<Mutex<ShortTermMemory>>) -> Self {
+    pub fn new(
+        config: System1Config, 
+        graph: CognitiveGraph, 
+        short_term: Arc<Mutex<ShortTermMemory>>,
+        episodic: Option<Arc<EpisodicStore>>,
+        embedder: Option<Arc<MemoryEmbedder>>,
+    ) -> Self {
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_default();
+
+        let persona_prompt = std::fs::read_to_string("instruct.txt")
+            .unwrap_or_else(|_| "Mày là Ryuuko...".to_string());
 
         Self {
             config,
@@ -116,17 +129,21 @@ impl System1Worker {
             http_client,
             graph,
             short_term,
+            persona_prompt,
+            episodic,
+            embedder,
         }
     }
 
     fn build_system_prompt(&self) -> String {
-        r#"Mày là Hệ thống 1 (Trực giác Bản năng) của Ryuuko.
-Nhiệm vụ của mày: Đánh giá Nhanh chóng một đoạn chat log, quét toàn bộ mọi thực thể xuất hiện trong đoạn chat để trích xuất CẢM XÚC THỰC SỰ của Ryuuko (internal_monologue) và TÁC ĐỘNG TỚI ĐỘ THÂN THIẾT (delta) lên nhiều mục tiêu cùng lúc.
-Phải dùng ngôn ngữ của Gen Z Việt Nam (chửi rủa, tục tĩu thoải mái, cực kỳ thật).
+        r#"Nhiệm vụ của bạn là Trình Đánh Giá Cảm Xúc (System 1).
+Bạn có 2 nhiệm vụ duy nhất:
+1. Đọc đoạn chat, tính toán sự biến thiên trọng số tâm lý (delta) lên các mục tiêu.
+2. Trích xuất suy nghĩ nội tâm của nhân vật trong lúc đọc hội thoại.
 
 Trả về STRICT JSON với cấu trúc sau:
 {
-  "internal_monologue": "những gì Ryuuko đang nghĩ trong đầu (VD: đm thằng này nói chuyện hãm thế, hoặc ôi dễ thương vãi~)",
+  "internal_monologue": "suy nghĩ nội tâm của nhân vật khi đọc đoạn chat",
   "social_updates": [
     {
       "target_user": "Tên user",
@@ -195,6 +212,7 @@ impl Worker for System1Worker {
         let http_client = self.http_client.clone();
         let config = self.config.clone();
         let system_prompt = self.build_system_prompt();
+        let persona_prompt = self.persona_prompt.clone();
         let graph = self.graph.clone();
         let short_term = self.short_term.clone();
         
@@ -205,34 +223,30 @@ impl Worker for System1Worker {
                 Some(_) = active_tasks.join_next() => {}
                 result = broadcast_rx.recv() => {
                     match result {
-                        Ok(Event::BotTurnCompletion(complete)) => {
-                            if complete.reply_to_user.is_none() {
-                                continue;
-                            }
-                            
-                            let user_id = complete.reply_to_user.clone().unwrap();
-                            let key = ConversationKey::new(complete.platform, complete.channel_id.clone());
+                        Ok(Event::Raw(raw)) if raw.is_mention => {
+                            let user_id = raw.username.clone();
+                            let key = ConversationKey::from_raw(&raw);
                             
                             // Get history from short term memory
                             let history = {
                                 let stm = short_term.lock().await;
-                                let dummy_id = "".to_string(); 
-                                stm.get_history_for_prompt(&key, &dummy_id)
+                                stm.get_history_for_prompt(&key, &raw.message_id)
                             };
                             
-                            if history.is_empty() {
-                                continue;
-                            }
-                            
                             let target_user = user_id.clone();
+                            let current_msg = raw.content.clone();
                             let c = config.clone();
                             let h = http_client.clone();
                             let sp = system_prompt.clone();
+                            let pp = persona_prompt.clone();
                             let g = graph.clone();
+                            
+                            let e = self.episodic.clone();
+                            let em = self.embedder.clone();
                             
                             // Spawn evaluate
                             active_tasks.spawn(async move {
-                                Self::evaluate_turn(&h, &c, &sp, &g, &target_user, history).await;
+                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, history, &current_msg, e, em).await;
                             });
                         }
                         Ok(_) => {}
@@ -265,17 +279,47 @@ impl System1Worker {
         client: &Client,
         config: &System1Config,
         system_prompt: &str,
+        persona: &str,
         graph: &CognitiveGraph,
         user_id: &str,
-        history: Vec<(String, String, String)>
+        history: Vec<(String, String, String)>,
+        current_msg: &str,
+        episodic: Option<Arc<EpisodicStore>>,
+        embedder: Option<Arc<MemoryEmbedder>>,
     ) {
-        let mut formatted_log = String::new();
-        for (role, _user, content) in history.iter().rev().take(4).rev() {
-            formatted_log.push_str(&format!("{}: {}\n", role, content));
-        }
+        let cognitive_context = crate::context::build_shared_cognitive_context(
+            &history,
+            episodic.as_ref(),
+            embedder.as_ref(),
+            graph,
+            user_id,
+            current_msg,
+        ).await;
         
-        let prompt = format!(
-            "Dựa trên log hội thoại vắn tắt sau đây, hãy trích xuất trực giác và delta:\n{}\n",
+        // System 1 trigger is concurrent with System 2, so append the current message manually
+        let mut formatted_log = String::new();
+        for (role, user, content) in history.iter().rev().take(4).rev() {
+            let name = if role == "assistant" { "Ryuuko" } else { user.as_str() };
+            formatted_log.push_str(&format!("{}: {}\n", name, content));
+        }
+        formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
+        
+        // Construct standard unified prompt
+        let mut composite_system_prompt = format!(
+            "DƯỚI ĐÂY LÀ CON NGƯỜI VÀ TÍNH CÁCH CỦA BẠN (Tên: Ryuuko):\n{}\n\n{}\n\n{}\n",
+            persona, 
+            cognitive_context.time_and_history_text,
+            system_prompt
+        );
+        
+        if let Some(mem) = cognitive_context.memory_text {
+            composite_system_prompt.push_str(&mem);
+            composite_system_prompt.push('\n');
+        }
+        composite_system_prompt.push_str(&cognitive_context.social_text);
+
+        let user_prompt = format!(
+            "Dựa trên log hội thoại vắn tắt sau đây, hãy trích xuất trực giác và lượng biến thiên tâm lý (delta):\n{}\n",
             formatted_log
         );
         
@@ -284,8 +328,8 @@ impl System1Worker {
         let req = ChatRequest {
             model: config.model.clone(),
             messages: vec![
-                ChatMessage { role: "system".to_string(), content: system_prompt.to_string() },
-                ChatMessage { role: "user".to_string(), content: prompt },
+                ChatMessage { role: "system".to_string(), content: composite_system_prompt },
+                ChatMessage { role: "user".to_string(), content: user_prompt },
             ],
             response_format: Some(serde_json::json!({ "type": "json_object" })),
             temperature: Some(0.3),

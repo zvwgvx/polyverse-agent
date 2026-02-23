@@ -409,127 +409,33 @@ impl LlmWorker {
             },
         ];
 
-        // --- RAG Episodic Memory Retrieval ---
-        // Build a search query from the context + new message
-        let recent_context = history.iter()
-            .rev()
-            .take(2)
-            .map(|(_, _, content)| content.as_str())
-            .collect::<Vec<_>>()
-            .join(" | ");
-        
-        let search_query = if recent_context.is_empty() {
-            raw_event.content.clone()
-        } else {
-            format!("{} | {}", recent_context, raw_event.content)
-        };
+        // --- Shared Cognitive Context ---
+        let cognitive_context = crate::context::build_shared_cognitive_context(
+            &history,
+            Some(&episodic),
+            Some(&embedder),
+            &graph,
+            current_username,
+            &raw_event.content,
+        ).await;
 
-        if let Ok(query_vec) = embedder.embed_single(search_query).await {
-            match episodic.search(&query_vec, 3, 0.5).await {
-                Ok(events) if !events.is_empty() => {
-                    let mut memory_text = String::from("### TỰ SUY NGHĨ (KÝ ỨC CŨ): Những thông tin sau có thể liên quan đến ngữ cảnh cuộc trò chuyện. Hãy linh hoạt sử dụng nếu thấy cần thiết (KHÔNG nhắc lại nguyên văn):\n");
-                    for ev in events {
-                        let date_str = chrono::DateTime::from_timestamp(ev.timestamp, 0)
-                            .map(|dt| dt.format("%Y-%m-%d").to_string())
-                            .unwrap_or_else(|| "Unknown date".to_string());
-                        memory_text.push_str(&format!("- [Vào {}]: {}\n", date_str, ev.content));
-                    }
-                    messages.push(ChatMessage {
-                        role: "system".to_string(),
-                        content: memory_text,
-                        name: None,
-                    });
-                }
-                _ => {} // No events found or error searching
-            }
+        if let Some(memory_text) = cognitive_context.memory_text {
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: memory_text,
+                name: None,
+            });
         }
 
-        // --- Cognitive Graph (System 2 Social Context) ---
-        match graph.get_social_context(current_username).await {
-            Ok((attitudes, illusion)) => {
-                let mut social_text = format!(
-                    "### TRẠNG THÁI CẢM XÚC & QUAN HỆ VỚI {}:\n", 
-                    current_username
-                );
-                
-                social_text.push_str(&format!(
-                    "- Mức độ Hảo cảm (Affinity): {:.2} (-1 ghét tởm, 1 yêu quý)\n",
-                    attitudes.affinity
-                ));
-                social_text.push_str(&format!(
-                    "- Độ thân thiết/Bám dính (Attachment): {:.2} (-1 né tránh, 1 bám lấy)\n",
-                    attitudes.attachment
-                ));
-                social_text.push_str(&format!(
-                    "- Niềm tin (Trust): {:.2} (-1 nghi ngờ, 1 tin tưởng tuyệt đối)\n",
-                    attitudes.trust
-                ));
-                social_text.push_str(&format!(
-                    "- Cảm giác An toàn (Safety): {:.2} (-1 sợ hãi/deft, 1 an tâm)\n",
-                    attitudes.safety
-                ));
-                social_text.push_str(&format!(
-                    "- Độ căng thẳng (Tension): {:.2} (0 thoải mái, 1 áp lực/tức giận)\n\n",
-                    attitudes.tension
-                ));
-                
-                social_text.push_str(&format!(
-                    "Lưu ý: Bạn (Ryuuko) đang có ảo tưởng rằng {} cảm nhận về bạn như sau:\n",
-                    current_username
-                ));
-                social_text.push_str(&format!(
-                    "- Họ thích/ghét bạn: {:.2} | Họ tin bạn: {:.2} | Căng thẳng: {:.2}\n",
-                    illusion.affinity, illusion.trust, illusion.tension
-                ));
-                
-                social_text.push_str("=> HÃY DÙNG CHÍNH ĐÚNG CẢM XÚC NÀY ĐỂ TRẢ LỜI (nếu thân thì vòi vĩnh, nếu ghét thì chửi/lạnh nhạt, nếu căng thẳng thì cáu gắt). ĐỪNG LỘ RA CÁC CON SỐ!\n");
-
-                messages.push(ChatMessage {
-                    role: "system".to_string(),
-                    content: social_text,
-                    name: None,
-                });
-            }
-            Err(e) => {
-                tracing::warn!("Failed to retrieve social context for {}: {}", current_username, e);
-            }
-        }
-
-        // --- Format Current Time for Context ---
-        let now = chrono::Utc::now();
-        let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
-        let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());
-        let time_context = format!(
-            "[NOW]: UTC: {} | Ryuuko(GMT+8): {} | User(GMT+7): {}\n",
-            now.format("%d/%m/%Y %H:%M:%S"),
-            sg_time.format("%d/%m/%Y %H:%M:%S"),
-            vn_time.format("%d/%m/%Y %H:%M:%S")
-        );
-
-        // --- Standard Preamble & History ---
-        let mut preamble = time_context;
-        if history.is_empty() {
-            preamble.push_str(&format!(
-                "[context: đây là tin nhắn đầu tiên từ {}. mày chưa biết người này — đây là người lạ.]",
-                current_username
-            ));
-        } else {
-            let users: Vec<&str> = history
-                .iter()
-                .filter(|(role, _, _)| role == "user")
-                .map(|(_, username, _)| username.as_str())
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            preamble.push_str(&format!(
-                "[context: đã có {} tin nhắn trước đó trong cuộc hội thoại này. người tham gia: {}. hãy trả lời dựa trên mạch hội thoại ở trên.]",
-                history.len(),
-                users.join(", ")
-            ));
-        };
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: preamble,
+            content: cognitive_context.social_text,
+            name: None,
+        });
+
+        messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: cognitive_context.time_and_history_text,
             name: None,
         });
 
@@ -556,7 +462,7 @@ impl LlmWorker {
             max_tokens: Some(config.chat_max_tokens),
             stream: Some(true),
             reasoning: Some(ReasoningConfig {
-                effort: "low".to_string(),
+                effort: "xhigh".to_string(),
             }),
             provider: Some(ProviderConfig {
                 order: Some(vec!["Google AI Studio".to_string()]),

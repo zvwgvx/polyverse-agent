@@ -272,7 +272,8 @@ async fn main() -> Result<()> {
             LlmWorker::new(llm_config)
                 .with_memory(Arc::clone(&short_term_handle))
                 .with_episodic(Arc::clone(&episodic))
-                .with_embedder(Arc::clone(&embedder)),
+                .with_embedder(Arc::clone(&embedder))
+                .with_graph(cognitive_graph.clone()),
         );
         worker_count += 1;
     } else {
@@ -300,6 +301,8 @@ async fn main() -> Result<()> {
                 sys1_config,
                 cognitive_graph.clone(),
                 Arc::clone(&short_term_handle),
+                Some(Arc::clone(&episodic)),
+                Some(Arc::clone(&embedder)),
             ));
             worker_count += 1;
         }

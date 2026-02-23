@@ -111,7 +111,9 @@ impl MemoryWorker {
                     match embedder.embed_single(compression.fact.clone()).await {
                         Ok(vector) => {
                             let timestamp = messages.last().unwrap().timestamp.timestamp();
+                            let target_username = messages.iter().find(|m| !m.is_bot_response).map(|m| m.username.clone()).unwrap_or_else(|| "unknown".to_string());
                             let metadata = serde_json::json!({
+                                "username": target_username,
                                 "message_count": messages.len(),
                                 "first_message_timestamp": messages.first().unwrap().timestamp.timestamp(),
                             }).to_string();
@@ -159,7 +161,6 @@ impl Worker for MemoryWorker {
             }
         }
 
-        // Open SQLite store (lives inside start — not in struct)
         let store = MemoryStore::open(&self.db_path)?;
         let msg_count = store.message_count().unwrap_or(0);
         info!(
@@ -167,6 +168,12 @@ impl Worker for MemoryWorker {
             existing_messages = msg_count,
             "Memory store opened"
         );
+
+        if let Ok(recent) = store.get_recent_all(500) {
+            let mut stm = self.short_term.lock().await;
+            stm.load_history(recent);
+            info!("Loaded recent history into short-term memory");
+        }
 
         let episodic = Arc::clone(self.episodic.as_ref().expect("EpisodicStore not initialized"));
         let embedder = Arc::clone(self.embedder.as_ref().expect("MemoryEmbedder not initialized"));

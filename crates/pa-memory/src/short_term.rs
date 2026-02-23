@@ -113,6 +113,28 @@ impl ShortTermMemory {
         expired_messages
     }
 
+    /// Load conversation history from persistent store on startup.
+    pub fn load_history(&mut self, messages: Vec<MemoryMessage>) {
+        for msg in messages {
+            let key = ConversationKey::new(msg.platform, msg.channel_id.clone());
+            let session = self.sessions.entry(key).or_insert_with(Session::new);
+            
+            if session.messages.is_empty() || msg.timestamp > session.last_active {
+                session.last_active = msg.timestamp;
+            }
+            if session.messages.is_empty() || msg.timestamp < session.started_at {
+                session.started_at = msg.timestamp;
+            }
+            
+            session.messages.push(msg);
+        }
+        
+        // Ensure chronological order
+        for session in self.sessions.values_mut() {
+            session.messages.sort_by_key(|m| m.timestamp);
+        }
+    }
+
     /// Get conversation context formatted for LLM prompt injection.
     /// Selects the most relevant messages using scoring.
     pub fn get_context_for_prompt(&self, key: &ConversationKey) -> Vec<&MemoryMessage> {
