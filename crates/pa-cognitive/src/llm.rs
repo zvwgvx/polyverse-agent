@@ -35,6 +35,8 @@ pub struct LlmConfig {
     pub model: String,
     /// Maximum tokens for chat completions
     pub chat_max_tokens: u32,
+    /// Optional reasoning effort (e.g. "low", "medium", "high")
+    pub reasoning: Option<String>,
 }
 
 impl LlmConfig {
@@ -461,9 +463,7 @@ impl LlmWorker {
             temperature: Some(0.7),
             max_tokens: Some(config.chat_max_tokens),
             stream: Some(true),
-            reasoning: Some(ReasoningConfig {
-                effort: "xhigh".to_string(),
-            }),
+            reasoning: config.reasoning.clone().map(|effort| ReasoningConfig { effort }),
             provider: Some(ProviderConfig {
                 order: Some(vec!["Google AI Studio".to_string()]),
                 allow_fallbacks: true,

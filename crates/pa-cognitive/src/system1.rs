@@ -19,6 +19,7 @@ pub struct System1Config {
     pub api_base: String,
     pub api_key: String,
     pub model: String,
+    pub reasoning: Option<String>,
 }
 
 impl System1Config {
@@ -33,8 +34,26 @@ impl System1Config {
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReasoningConfig {
+    pub effort: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order: Option<Vec<String>>,
+    allow_fallbacks: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +64,6 @@ struct ChatMessage {
 
 #[derive(Debug, Deserialize)]
 struct System1ResponseFormat {
-    internal_monologue: String,
     social_updates: Vec<SocialTargetUpdate>,
     observed_dynamics: Option<Vec<ObservedDynamic>>,
     entity_updates: Option<Vec<EntityUpdate>>,
@@ -75,7 +93,6 @@ struct IllusionDeltaReq {
     expected_delta_trust: f32,
     expected_delta_safety: f32,
     expected_delta_tension: f32,
-    reasoning: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,13 +154,10 @@ impl System1Worker {
 
     fn build_system_prompt(&self) -> String {
         r#"Nhiệm vụ của bạn là Trình Đánh Giá Cảm Xúc (System 1).
-Bạn có 2 nhiệm vụ duy nhất:
-1. Đọc đoạn chat, tính toán sự biến thiên trọng số tâm lý (delta) lên các mục tiêu.
-2. Trích xuất suy nghĩ nội tâm của nhân vật trong lúc đọc hội thoại.
+Nhiệm vụ duy nhất: Đọc đoạn chat, tính toán sự biến thiên trọng số tâm lý (delta) lên các mục tiêu.
 
 Trả về STRICT JSON với cấu trúc sau:
 {
-  "internal_monologue": "suy nghĩ nội tâm của nhân vật khi đọc đoạn chat",
   "social_updates": [
     {
       "target_user": "Tên user",
@@ -160,8 +174,7 @@ Trả về STRICT JSON với cấu trúc sau:
         "expected_delta_attachment": f32,
         "expected_delta_trust": f32,
         "expected_delta_safety": f32,
-        "expected_delta_tension": f32,
-        "reasoning": "Lý do ảo tưởng"
+        "expected_delta_tension": f32
       }
     }
   ],
@@ -183,7 +196,29 @@ Trả về STRICT JSON với cấu trúc sau:
   ]
 }
 
-Giá trị delta dao động từ -0.5 đến +0.5. Đa số thời gian nên để giá trị nhỏ (-0.05, 0.05).
+=== QUY TẮC DELTA BẮT BUỘC ===
+Mỗi giá trị delta BẮT BUỘC nằm trong khoảng [-0.30, +0.30]. Vi phạm sẽ bị hệ thống cắt bớt.
+
+BẢNG HƯỚNG DẪN DELTA (tuân thủ nghiêm ngặt):
+| Loại tương tác                          | Delta phù hợp       |
+|-----------------------------------------|----------------------|
+| Chat bình thường, hỏi thăm, small talk | 0.000 ~ ±0.003      |
+| Chia sẻ sở thích chung, đồng ý nhẹ    | ±0.003 ~ ±0.008     |
+| Giúp đỡ, chia sẻ cảm xúc sâu         | ±0.008 ~ ±0.015     |
+| Hiểu lầm nhẹ, bất đồng quan điểm     | ±0.010 ~ ±0.020     |
+| Xúc phạm, phản bội, cứu giúp lớn     | ±0.020 ~ ±0.050     |
+| SHOCK: phản bội sâu, cứu mạng         | ±0.050 ~ ±0.150     |
+| PANIC: đe doạ tính mạng, phản bội hủy hoại, sự kiện thay đổi hoàn toàn mối quan hệ | ±0.150 ~ ±0.300     |
+
+NGUYÊN TẮC:
+- 90% tin nhắn bình thường nên có delta ≈ 0.001 ~ 0.005
+- Delta = 0.000 là HOÀN TOÀN HỢP LÝ cho tin nhắn không có ý nghĩa cảm xúc
+- Delta >= 0.03 chỉ dùng cho sự kiện ĐẶC BIỆT
+- Delta >= 0.10 chỉ dùng cho sự kiện GÂY SỐC (rất hiếm)
+- Delta >= 0.20 chỉ dùng cho sự kiện PANIC CỰC ĐỘ (gần như không bao giờ xảy ra)
+- Quan hệ thay đổi CHẬM — cần hàng trăm tin nhắn để xây dựng niềm tin thực sự
+- KHÔNG bao giờ cho delta > 0.30 hoặc < -0.30
+
 Trường projected_illusion_delta có thể null nếu role là mentioned_person. Các mảng observed_dynamics và entity_updates có thể null hoặc rỗng nếu không có.
 Không sinh ra bất kỳ văn bản nào ngoài JSON Object này."#.to_string()
     }
@@ -333,6 +368,11 @@ impl System1Worker {
             ],
             response_format: Some(serde_json::json!({ "type": "json_object" })),
             temperature: Some(0.3),
+            reasoning: config.reasoning.clone().map(|effort| ReasoningConfig { effort }),
+            provider: Some(ProviderConfig {
+                order: Some(vec!["Google AI Studio".to_string()]),
+                allow_fallbacks: true,
+            }),
         };
         
         let url = format!("{}/chat/completions", config.api_base.trim_end_matches('/'));
@@ -370,7 +410,7 @@ impl System1Worker {
         let parsed: Result<System1ResponseFormat, _> = serde_json::from_str(clean_json);
         match parsed {
             Ok(data) => {
-                info!("System 1 Monologue: {}", data.internal_monologue);
+                debug!("System 1 evaluation completed");
                 
                 // Process social updates (R -> U and U -> R)
                 for social in data.social_updates {

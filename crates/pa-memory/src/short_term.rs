@@ -13,6 +13,8 @@ struct Session {
     last_active: DateTime<Utc>,
     /// Session start time
     started_at: DateTime<Utc>,
+    /// Whether this session's messages have already been ingested into RAG
+    already_ingested: bool,
 }
 
 impl Session {
@@ -22,6 +24,7 @@ impl Session {
             messages: Vec::new(),
             last_active: now,
             started_at: now,
+            already_ingested: false,
         }
     }
 
@@ -96,12 +99,20 @@ impl ShortTermMemory {
             if session.is_expired(now, self.config.base_timeout_secs) {
                 // Session expired — take the old messages for persistence
                 let old = self.sessions.remove(&key).unwrap();
-                info!(
-                    conversation = %key,
-                    messages = old.messages.len(),
-                    "Session expired, starting new session"
-                );
-                expired_messages = Some(old.messages);
+                if old.already_ingested {
+                    info!(
+                        conversation = %key,
+                        messages = old.messages.len(),
+                        "Session expired, flushed to store (boot-loaded, skipping RAG)"
+                    );
+                } else {
+                    info!(
+                        conversation = %key,
+                        messages = old.messages.len(),
+                        "Session expired, starting new session"
+                    );
+                    expired_messages = Some(old.messages);
+                }
             }
         }
 
@@ -132,6 +143,14 @@ impl ShortTermMemory {
         // Ensure chronological order
         for session in self.sessions.values_mut() {
             session.messages.sort_by_key(|m| m.timestamp);
+        }
+    }
+
+    /// Mark all current sessions as already ingested into RAG.
+    /// Called after loading history from DB on boot to prevent double-ingestion.
+    pub fn mark_all_persisted(&mut self) {
+        for session in self.sessions.values_mut() {
+            session.already_ingested = true;
         }
     }
 
@@ -279,6 +298,14 @@ impl ShortTermMemory {
         let mut result = Vec::new();
         for key in expired_keys {
             if let Some(session) = self.sessions.remove(&key) {
+                if session.already_ingested {
+                    debug!(
+                        conversation = %key,
+                        messages = session.messages.len(),
+                        "Dropping boot-loaded expired session (already ingested)"
+                    );
+                    continue;
+                }
                 debug!(
                     conversation = %key,
                     messages = session.messages.len(),

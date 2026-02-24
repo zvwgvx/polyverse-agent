@@ -18,11 +18,22 @@ pub struct SemanticCompressor {
 
 impl SemanticCompressor {
     pub fn new() -> Result<Self> {
-        let api_base = std::env::var("API_BASE")
+        let api_base = std::env::var("SYS1_API_BASE")
+            .or_else(|_| std::env::var("SYS2_API_BASE"))
+            .or_else(|_| std::env::var("OPENAI_API_BASE"))
+            .or_else(|_| std::env::var("API_BASE"))
             .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
-        let api_key = std::env::var("API_KEY")
+            
+        let api_key = std::env::var("SYS1_API_KEY")
+            .or_else(|_| std::env::var("SYS2_API_KEY"))
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .or_else(|_| std::env::var("API_KEY"))
             .context("API_KEY missing from environment")?;
-        let model = std::env::var("MODEL")
+            
+        let model = std::env::var("SYS1_MODEL")
+            .or_else(|_| std::env::var("SYS2_MODEL"))
+            .or_else(|_| std::env::var("OPENAI_MODEL"))
+            .or_else(|_| std::env::var("MODEL"))
             .unwrap_or_else(|_| "google/gemini-2.5-flash".to_string());
         
         let semantic_max_tokens = std::env::var("SEMANTIC_MAX_TOKENS")

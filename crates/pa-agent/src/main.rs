@@ -79,6 +79,8 @@ struct LlmFileConfig {
     api_key: String,
     #[serde(default)]
     model: String,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 fn default_name() -> String {
@@ -156,6 +158,9 @@ fn load_config() -> Result<Config> {
     }
     if let Ok(model) = std::env::var("SYS2_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")).or_else(|_| std::env::var("MODEL")) {
         config.llm.model = model;
+    }
+    if let Ok(reasoning) = std::env::var("SYS2_REASONING").or_else(|_| std::env::var("OPENAI_REASONING")).or_else(|_| std::env::var("REASONING")) {
+        config.llm.reasoning = Some(reasoning);
     }
 
     Ok(config)
@@ -260,6 +265,7 @@ async fn main() -> Result<()> {
         api_key: config.llm.api_key.clone(),
         model: config.llm.model.clone(),
         chat_max_tokens,
+        reasoning: config.llm.reasoning.clone(),
     };
 
     if llm_config.is_valid() {
@@ -284,12 +290,15 @@ async fn main() -> Result<()> {
     if let (Ok(base), Ok(key), Ok(model)) = (
         std::env::var("SYS1_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")),
         std::env::var("SYS1_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")),
-        std::env::var("SYS1_MODEL")
+        std::env::var("SYS1_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")).or_else(|_| std::env::var("MODEL"))
     ) {
+        let reasoning = std::env::var("SYS1_REASONING").or_else(|_| std::env::var("OPENAI_REASONING")).or_else(|_| std::env::var("REASONING")).ok();
+        
         let sys1_config = System1Config {
             api_base: base,
             api_key: key,
             model,
+            reasoning,
         };
         if sys1_config.is_valid() {
             info!(

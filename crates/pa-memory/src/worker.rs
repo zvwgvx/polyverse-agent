@@ -172,6 +172,7 @@ impl Worker for MemoryWorker {
         if let Ok(recent) = store.get_recent_all(500) {
             let mut stm = self.short_term.lock().await;
             stm.load_history(recent);
+            stm.mark_all_persisted(); // Don't re-ingest into RAG on expire
             info!("Loaded recent history into short-term memory");
         }
 
@@ -222,12 +223,9 @@ impl Worker for MemoryWorker {
                                 error!(error = %e, "Failed to persist message");
                             }
 
-                            // Persist expired session messages (batch)
+                            // Persist expired session messages (batch) — skip insert, already individual
                             if let Some(expired_msgs) = expired {
-                                if let Err(e) = store.insert_batch(&expired_msgs) {
-                                    error!(error = %e, "Failed to persist expired session");
-                                }
-                                
+                                // Only ingest into RAG (no re-insert to SQLite)
                                 if let Some(comp) = &compressor {
                                     Self::ingest_session(
                                         expired_msgs,
@@ -283,10 +281,8 @@ impl Worker for MemoryWorker {
                             messages = messages.len(),
                             "Session expired, flushed to store"
                         );
-                        if let Err(e) = store.insert_batch(&messages) {
-                            error!(error = %e, "Failed to persist flushed session");
-                        }
-                        
+                        // These messages were already persisted individually
+                        // Only ingest into RAG (LanceDB)
                         if let Some(comp) = &compressor {
                             Self::ingest_session(
                                 messages,
