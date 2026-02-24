@@ -107,7 +107,13 @@ client.on('messageCreate', async (msg) => {
     let isMention = false;
     let isDm = !msg.guildId;
 
-    if (msg.mentions.users.has(client.user.id) || isDm) {
+    // Check for EXPLICIT mention (user typed @bot in the message text)
+    // vs IMPLICIT mention (Discord auto-adds when replying to bot's message)
+    // We only want to respond to EXPLICIT mentions to avoid double-responding
+    const hasExplicitMention = msg.content.includes(`<@${client.user.id}>`) ||
+        msg.content.includes(`<@!${client.user.id}>`);
+
+    if (hasExplicitMention || isDm) {
         isMention = true;
     }
 
