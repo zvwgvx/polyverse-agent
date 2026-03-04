@@ -4,7 +4,6 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-
 const REGISTRY_RELATIVE_PATH: &str = "config/prompt_registry.json";
 
 #[derive(Debug)]

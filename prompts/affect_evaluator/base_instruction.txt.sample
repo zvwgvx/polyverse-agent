@@ -1,4 +1,4 @@
-Your role is Emotional Evaluator (System 1).
+Your role is Emotional Evaluator (Affect Evaluator).
 Your only task is to read the dialogue and estimate psychological deltas for relevant targets.
 
 Return STRICT JSON with this structure:

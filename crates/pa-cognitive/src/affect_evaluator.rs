@@ -14,14 +14,14 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone)]
-pub struct System1Config {
+pub struct AffectEvaluatorConfig {
     pub api_base: String,
     pub api_key: String,
     pub model: String,
     pub reasoning: Option<String>,
 }
 
-impl System1Config {
+impl AffectEvaluatorConfig {
     pub fn is_valid(&self) -> bool {
         !self.api_base.is_empty() && !self.api_key.is_empty() && !self.model.is_empty()
     }
@@ -60,7 +60,7 @@ struct ChatMessage {
 }
 
 #[derive(Debug, Deserialize)]
-struct System1ResponseFormat {
+struct AffectEvaluatorResponseFormat {
     social_updates: Vec<SocialTargetUpdate>,
     observed_dynamics: Option<Vec<ObservedDynamic>>,
     entity_updates: Option<Vec<EntityUpdate>>,
@@ -107,8 +107,8 @@ struct EntityUpdate {
     delta_fascination: f32,
 }
 
-pub struct System1Worker {
-    pub config: System1Config,
+pub struct AffectEvaluatorWorker {
+    pub config: AffectEvaluatorConfig,
     status: WorkerStatus,
     http_client: Client,
     pub graph: CognitiveGraph,
@@ -118,9 +118,9 @@ pub struct System1Worker {
     pub embedder: Option<Arc<MemoryEmbedder>>,
 }
 
-impl System1Worker {
+impl AffectEvaluatorWorker {
     pub fn new(
-        config: System1Config, 
+        config: AffectEvaluatorConfig, 
         graph: CognitiveGraph, 
         short_term: Arc<Mutex<ShortTermMemory>>,
         episodic: Option<Arc<EpisodicStore>>,
@@ -147,23 +147,23 @@ impl System1Worker {
 
     fn build_system_prompt(&self) -> String {
         get_prompt_or(
-            "system1.base_instruction",
-            "You are System 1 emotional evaluator. Return strict JSON only.",
+            "affect_evaluator.base_instruction",
+            "You are an affect evaluator. Return strict JSON only.",
         )
     }
 }
 
 #[async_trait]
-impl Worker for System1Worker {
+impl Worker for AffectEvaluatorWorker {
     fn name(&self) -> &str {
-        "system1"
+        "affect_evaluator"
     }
 
     async fn start(&mut self, ctx: WorkerContext) -> Result<()> {
-        info!("System 1 evaluator starting...");
+        info!("Affect evaluator starting...");
 
         if !self.config.is_valid() {
-            warn!("System 1 config invalid, disabling worker.");
+            warn!("Affect evaluator config invalid, disabling worker.");
             self.status = WorkerStatus::Stopped;
             return Ok(());
         }
@@ -222,7 +222,7 @@ impl Worker for System1Worker {
         
         active_tasks.abort_all();
         self.status = WorkerStatus::Stopped;
-        info!("System 1 Evaluator stopped");
+        info!("Affect evaluator stopped");
         Ok(())
     }
 
@@ -236,10 +236,10 @@ impl Worker for System1Worker {
     }
 }
 
-impl System1Worker {
+impl AffectEvaluatorWorker {
     async fn evaluate_turn(
         client: &Client,
-        config: &System1Config,
+        config: &AffectEvaluatorConfig,
         system_prompt: &str,
         persona: &str,
         graph: &CognitiveGraph,
@@ -266,7 +266,7 @@ impl System1Worker {
 	    formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
 	        
         let mut composite_system_prompt = render_prompt_or(
-            "system1.composite_header",
+            "affect_evaluator.composite_header",
             &[
                 ("persona", persona),
                 (
@@ -285,12 +285,12 @@ impl System1Worker {
         composite_system_prompt.push_str(&cognitive_context.social_text);
 
         let user_prompt = render_prompt_or(
-            "system1.user_extract",
+            "affect_evaluator.user_extract",
             &[("formatted_log", formatted_log.as_str())],
             "Based on the short dialogue log below, extract intuition and deltas:\n{{formatted_log}}\n",
         );
         
-        debug!("Triggering System 1 JSON evaluator for user {}", user_id);
+        debug!("Triggering affect evaluator JSON pass for user {}", user_id);
         
         let req = ChatRequest {
             model: config.model.clone(),
@@ -314,13 +314,13 @@ impl System1Worker {
             .json(&req).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("System 1 request failed: {}", e);
+                    warn!("Affect evaluator request failed: {}", e);
                     return;
                 }
             };
             
         if !res.status().is_success() {
-            warn!("System 1 returned error status: {}", res.status());
+            warn!("Affect evaluator returned error status: {}", res.status());
             return;
         }
         
@@ -338,10 +338,10 @@ impl System1Worker {
             content_str
         };
         
-        let parsed: Result<System1ResponseFormat, _> = serde_json::from_str(clean_json);
+        let parsed: Result<AffectEvaluatorResponseFormat, _> = serde_json::from_str(clean_json);
 	        match parsed {
 	            Ok(data) => {
-	                debug!("System 1 evaluation completed");
+	                debug!("Affect evaluator completed");
 	                
 	                for social in data.social_updates {
 	                    let s_delta = SocialDelta {
@@ -394,10 +394,10 @@ impl System1Worker {
                     }
                 }
                 
-                debug!("Multi-target Graph updated successfully via System 1");
+                debug!("Multi-target graph updated successfully via affect evaluator");
             }
             Err(e) => {
-                warn!("System 1 JSON parse error: {}\nContent: {}", e, clean_json);
+                warn!("Affect evaluator JSON parse error: {}\nContent: {}", e, clean_json);
             }
         }
     }

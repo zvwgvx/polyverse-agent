@@ -17,19 +17,19 @@ pub struct SemanticCompressor {
 
 impl SemanticCompressor {
     pub fn new() -> Result<Self> {
-        let api_base = std::env::var("SYS1_API_BASE")
+        let api_base = std::env::var("AFFECT_EVALUATOR_API_BASE")
             .or_else(|_| std::env::var("SYS2_API_BASE"))
             .or_else(|_| std::env::var("OPENAI_API_BASE"))
             .or_else(|_| std::env::var("API_BASE"))
             .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
             
-        let api_key = std::env::var("SYS1_API_KEY")
+        let api_key = std::env::var("AFFECT_EVALUATOR_API_KEY")
             .or_else(|_| std::env::var("SYS2_API_KEY"))
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .or_else(|_| std::env::var("API_KEY"))
             .context("API_KEY missing from environment")?;
             
-        let model = std::env::var("SYS1_MODEL")
+        let model = std::env::var("AFFECT_EVALUATOR_MODEL")
             .or_else(|_| std::env::var("SYS2_MODEL"))
             .or_else(|_| std::env::var("OPENAI_MODEL"))
             .or_else(|_| std::env::var("MODEL"))

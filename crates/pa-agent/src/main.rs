@@ -6,7 +6,7 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use pa_cognitive::{LlmConfig, LlmWorker, System1Config, System1Worker};
+use pa_cognitive::{AffectEvaluatorConfig, AffectEvaluatorWorker, LlmConfig, LlmWorker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
@@ -264,26 +264,35 @@ async fn main() -> Result<()> {
     }
 
     if let (Ok(base), Ok(key), Ok(model)) = (
-        std::env::var("SYS1_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")),
-        std::env::var("SYS1_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")),
-        std::env::var("SYS1_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")).or_else(|_| std::env::var("MODEL"))
+        std::env::var("AFFECT_EVALUATOR_API_BASE")
+            .or_else(|_| std::env::var("OPENAI_API_BASE"))
+            .or_else(|_| std::env::var("API_BASE")),
+        std::env::var("AFFECT_EVALUATOR_API_KEY")
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .or_else(|_| std::env::var("API_KEY")),
+        std::env::var("AFFECT_EVALUATOR_MODEL")
+            .or_else(|_| std::env::var("OPENAI_MODEL"))
+            .or_else(|_| std::env::var("MODEL"))
     ) {
-        let reasoning = std::env::var("SYS1_REASONING").or_else(|_| std::env::var("OPENAI_REASONING")).or_else(|_| std::env::var("REASONING")).ok();
-        
-        let sys1_config = System1Config {
+        let reasoning = std::env::var("AFFECT_EVALUATOR_REASONING")
+            .or_else(|_| std::env::var("OPENAI_REASONING"))
+            .or_else(|_| std::env::var("REASONING"))
+            .ok();
+
+        let affect_evaluator_config = AffectEvaluatorConfig {
             api_base: base,
             api_key: key,
             model,
             reasoning,
         };
-        if sys1_config.is_valid() {
+        if affect_evaluator_config.is_valid() {
             info!(
-                api_base = %sys1_config.api_base,
-                model = %sys1_config.model,
-                "Registering System 1 JSON Evaluator"
+                api_base = %affect_evaluator_config.api_base,
+                model = %affect_evaluator_config.model,
+                "Registering Affect Evaluator JSON worker"
             );
-            supervisor.register(System1Worker::new(
-                sys1_config,
+            supervisor.register(AffectEvaluatorWorker::new(
+                affect_evaluator_config,
                 cognitive_graph.clone(),
                 Arc::clone(&short_term_handle),
                 Some(Arc::clone(&episodic)),
@@ -292,7 +301,9 @@ async fn main() -> Result<()> {
             worker_count += 1;
         }
     } else {
-        warn!("System 1 not configured (set SYS1_API_BASE, SYS1_API_KEY, SYS1_MODEL in .env)");
+        warn!(
+            "Affect evaluator not configured (set AFFECT_EVALUATOR_API_BASE, AFFECT_EVALUATOR_API_KEY, AFFECT_EVALUATOR_MODEL in .env)"
+        );
     }
 
     if worker_count == 0 {

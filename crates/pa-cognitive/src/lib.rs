@@ -1,6 +1,6 @@
 pub mod context;
 pub mod llm;
-pub mod system1;
+pub mod affect_evaluator;
 
 pub use llm::{LlmConfig, LlmWorker};
-pub use system1::{System1Config, System1Worker};
+pub use affect_evaluator::{AffectEvaluatorConfig, AffectEvaluatorWorker};

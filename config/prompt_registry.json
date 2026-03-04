@@ -2,9 +2,9 @@
   "prompts": {
     "persona.base": "prompts/persona/base.txt",
     "persona.fallback_short": "prompts/persona/fallback_short.txt",
-    "system1.base_instruction": "prompts/system1/base_instruction.txt",
-    "system1.composite_header": "prompts/system1/composite_header.txt",
-    "system1.user_extract": "prompts/system1/user_extract.txt",
+    "affect_evaluator.base_instruction": "prompts/affect_evaluator/base_instruction.txt",
+    "affect_evaluator.composite_header": "prompts/affect_evaluator/composite_header.txt",
+    "affect_evaluator.user_extract": "prompts/affect_evaluator/user_extract.txt",
     "context.memory.header": "prompts/context/memory_header.txt",
     "context.memory.item": "prompts/context/memory_item.txt",
     "context.social.known": "prompts/context/social_known.txt",
