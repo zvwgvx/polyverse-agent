@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use pa_core::prompt_registry::{get_prompt_or, render_prompt_or};
 use reqwest::{Client, header};
 
 #[derive(Debug, Clone)]
@@ -60,13 +61,25 @@ impl SemanticCompressor {
         let now = chrono::Utc::now();
         let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
         let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());
-        
-        let system_prompt_with_diary_cmd = format!(
-            "{}\n\n{}\n\n{}",
-            base_persona,
-            format!("📅 [THỜI GIAN HIỆN TẠI LÚC VIẾT NHẬT KÝ]:\n- Giờ chuẩn (UTC/GMT): {}\n- Giờ của mày (Singapore GMT+8): {}\n- Giờ của User (Việt Nam GMT+7): {}\n", now.format("%d/%m/%Y %H:%M:%S"), sg_time.format("%d/%m/%Y %H:%M:%S"), vn_time.format("%d/%m/%Y %H:%M:%S")),
-            "--- LỆNH CHUYỂN ĐỔI TRẠNG THÁI ---\nPhiên chat đã kết thúc. Mày VẪN LÀ Ryuuko. Bây giờ mày đang ngồi đọc lại log chat bên dưới để tự viết NHẬT KÝ BÍ MẬT. Hãy xuất ra ĐỊNH DẠNG JSON với 1 trường duy nhất: \"diary_entry\" tóm tắt lại sự kiện và cảm xúc thật của mày (không viết hoa đầu câu, xài từ viết tắt như lúc chat bình thường)."
+
+        let utc_time = now.format("%d/%m/%Y %H:%M:%S").to_string();
+        let agent_time = sg_time.format("%d/%m/%Y %H:%M:%S").to_string();
+        let user_time = vn_time.format("%d/%m/%Y %H:%M:%S").to_string();
+        let time_block = render_prompt_or(
+            "memory.compressor.time_block",
+            &[
+                ("utc_time", utc_time.as_str()),
+                ("agent_time", agent_time.as_str()),
+                ("user_time", user_time.as_str()),
+            ],
+            "Current time:\n- UTC: {{utc_time}}\n- Agent: {{agent_time}}\n- User: {{user_time}}\n",
         );
+        let diary_cmd = get_prompt_or(
+            "memory.compressor.diary_cmd",
+            "--- STATE TRANSITION COMMAND ---\nSession ended. Output JSON with one field: \"diary_entry\".",
+        );
+        let system_prompt_with_diary_cmd =
+            format!("{}\n\n{}\n\n{}", base_persona, time_block, diary_cmd);
 
         let payload = serde_json::json!({
             "model": self.model,

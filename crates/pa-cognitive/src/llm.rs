@@ -143,12 +143,17 @@ impl LlmWorker {
     }
 
     fn default_system_prompt() -> String {
-        match std::fs::read_to_string("instruct.txt") {
+        match pa_core::prompt_registry::get_prompt("persona.base") {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Failed to read instruct.txt, using fallback prompt. Error: {}", e);
-                r#"mày là Ryuuko, chatbot AI.
-hãy trả lời ngắn gọn, tự nhiên."#.to_string()
+                tracing::warn!(
+                    "Failed to load persona.base from prompt registry, using fallback prompt. Error: {}",
+                    e
+                );
+                pa_core::prompt_registry::get_prompt_or(
+                    "llm.fallback",
+                    "You are Ryuuko, an AI chatbot.\nReply briefly and naturally.\n",
+                )
             }
         }
     }

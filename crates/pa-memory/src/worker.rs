@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use pa_core::event::Event;
 use pa_core::worker::Worker;
+use pa_core::prompt_registry::{get_prompt_or, render_prompt_or};
 use pa_core::WorkerContext;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
@@ -68,20 +69,20 @@ impl MemoryWorker {
         
         tokio::spawn(async move {
             let session_id = uuid::Uuid::new_v4().to_string();
-            
-            let base_persona = tokio::fs::read_to_string("instruct.txt")
-                .await
-                .unwrap_or_else(|_| "Mày là Ryuuko.".to_string());
+
+            let base_persona = get_prompt_or("persona.base", "You are Ryuuko.");
 
             let mut formatted_msgs = Vec::new();
             for msg in &messages {
                 let speaker = if msg.is_bot_response { "Ryuuko" } else { &msg.username };
                 formatted_msgs.push(format!("[{}]: {}", speaker, msg.content));
             }
-            
-            let chat_log_doc = format!(
-                "=== BẮT ĐẦU LOG CHAT ===\n{}\n=== KẾT THÚC LOG CHAT ===",
-                formatted_msgs.join("\n")
+
+            let joined_log = formatted_msgs.join("\n");
+            let chat_log_doc = render_prompt_or(
+                "memory.chatlog.wrapper",
+                &[("chat_log", joined_log.as_str())],
+                "=== CHAT LOG START ===\n{{chat_log}}\n=== CHAT LOG END ===\n",
             );
 
             match compressor.compress(&base_persona, &chat_log_doc).await {

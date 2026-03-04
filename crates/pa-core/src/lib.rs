@@ -1,6 +1,7 @@
 
 pub mod biology;
 pub mod event;
+pub mod prompt_registry;
 pub mod state;
 pub mod worker;
 

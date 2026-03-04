@@ -1,0 +1,22 @@
+# Persona Authoring Guide (Template)
+
+Purpose:
+- Define the agent's identity, boundaries, tone, and behavioral rules.
+- Keep this file as runtime system persona text loaded by `persona.base`.
+
+What to include:
+- Identity: name, age range, background, core worldview.
+- Communication style: tone, brevity, slang policy, language switching rules.
+- Behavioral constraints: safety boundaries, refusal policy, privacy limits.
+- Relational behavior: trust-building speed, openness rules, stranger policy.
+- Operational rules: no meta disclosure, no role-break, no tool leakage.
+
+Writing rules:
+- Write in clear sections with stable headings.
+- Avoid contradictory instructions.
+- Prefer concrete rules over vague adjectives.
+- Keep examples short and representative.
+
+Maintenance:
+- Update in small revisions and keep a changelog externally.
+- Re-test key transcripts after each change.

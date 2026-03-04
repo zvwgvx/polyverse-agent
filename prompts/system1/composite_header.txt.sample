@@ -1,0 +1,6 @@
+Below is your persona and behavioral profile (Name: {{agent_name}}):
+{{persona}}
+
+{{time_and_history_text}}
+
+{{system_prompt}}

@@ -17,7 +17,6 @@
 .DS_Store
 Thumbs.db
 `
-instruct.txt
 
 # Mac OS
 .AppleDouble
@@ -29,3 +28,7 @@ Icon
 .cache/
 .npm/
 .fastembed_cache
+
+# Prompt secrets (custom runtime prompts)
+prompts/**/*.txt
+!prompts/**/*.txt.sample

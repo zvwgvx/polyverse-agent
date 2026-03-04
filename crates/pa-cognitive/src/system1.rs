@@ -2,6 +2,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use pa_core::event::Event;
+use pa_core::prompt_registry::{get_prompt_or, render_prompt_or};
 use pa_core::worker::{Worker, WorkerContext, WorkerStatus};
 use pa_memory::graph::{CognitiveGraph, SocialDelta, EmotionDelta};
 use pa_memory::short_term::ShortTermMemory;
@@ -130,8 +131,7 @@ impl System1Worker {
             .build()
             .unwrap_or_default();
 
-        let persona_prompt = std::fs::read_to_string("instruct.txt")
-            .unwrap_or_else(|_| "Mày là Ryuuko...".to_string());
+        let persona_prompt = get_prompt_or("persona.base", "You are Ryuuko.");
 
         Self {
             config,
@@ -146,74 +146,10 @@ impl System1Worker {
     }
 
     fn build_system_prompt(&self) -> String {
-        r#"Nhiệm vụ của bạn là Trình Đánh Giá Cảm Xúc (System 1).
-Nhiệm vụ duy nhất: Đọc đoạn chat, tính toán sự biến thiên trọng số tâm lý (delta) lên các mục tiêu.
-
-Trả về STRICT JSON với cấu trúc sau:
-{
-  "social_updates": [
-    {
-      "target_user": "Tên user",
-      "role": "chat_partner hoặc mentioned_person",
-      "actual_perception_delta": {
-        "delta_affinity": f32,
-        "delta_attachment": f32,
-        "delta_trust": f32,
-        "delta_safety": f32,
-        "delta_tension": f32
-      },
-      "projected_illusion_delta": {
-        "expected_delta_affinity": f32,
-        "expected_delta_attachment": f32,
-        "expected_delta_trust": f32,
-        "expected_delta_safety": f32,
-        "expected_delta_tension": f32
-      }
-    }
-  ],
-  "observed_dynamics": [ 
-    {
-      "from_user": "Tên",
-      "to_user": "Tên",
-      "observation": "Nhận xét",
-      "estimated_tension": f32
-    }
-  ],
-  "entity_updates": [ 
-    {
-      "entity_name": "Tên sự vật/chủ đề",
-      "delta_preference": f32,
-      "delta_stress": f32,
-      "delta_fascination": f32
-    }
-  ]
-}
-
-=== QUY TẮC DELTA BẮT BUỘC ===
-Mỗi giá trị delta BẮT BUỘC nằm trong khoảng [-0.30, +0.30]. Vi phạm sẽ bị hệ thống cắt bớt.
-
-BẢNG HƯỚNG DẪN DELTA (tuân thủ nghiêm ngặt):
-| Loại tương tác                          | Delta phù hợp       |
-|-----------------------------------------|----------------------|
-| Chat bình thường, hỏi thăm, small talk | 0.000 ~ ±0.003      |
-| Chia sẻ sở thích chung, đồng ý nhẹ    | ±0.003 ~ ±0.008     |
-| Giúp đỡ, chia sẻ cảm xúc sâu         | ±0.008 ~ ±0.015     |
-| Hiểu lầm nhẹ, bất đồng quan điểm     | ±0.010 ~ ±0.020     |
-| Xúc phạm, phản bội, cứu giúp lớn     | ±0.020 ~ ±0.050     |
-| SHOCK: phản bội sâu, cứu mạng         | ±0.050 ~ ±0.150     |
-| PANIC: đe doạ tính mạng, phản bội hủy hoại, sự kiện thay đổi hoàn toàn mối quan hệ | ±0.150 ~ ±0.300     |
-
-NGUYÊN TẮC:
-- 90% tin nhắn bình thường nên có delta ≈ 0.001 ~ 0.005
-- Delta = 0.000 là HOÀN TOÀN HỢP LÝ cho tin nhắn không có ý nghĩa cảm xúc
-- Delta >= 0.03 chỉ dùng cho sự kiện ĐẶC BIỆT
-- Delta >= 0.10 chỉ dùng cho sự kiện GÂY SỐC (rất hiếm)
-- Delta >= 0.20 chỉ dùng cho sự kiện PANIC CỰC ĐỘ (gần như không bao giờ xảy ra)
-- Quan hệ thay đổi CHẬM — cần hàng trăm tin nhắn để xây dựng niềm tin thực sự
-- KHÔNG bao giờ cho delta > 0.30 hoặc < -0.30
-
-Trường projected_illusion_delta có thể null nếu role là mentioned_person. Các mảng observed_dynamics và entity_updates có thể null hoặc rỗng nếu không có.
-Không sinh ra bất kỳ văn bản nào ngoài JSON Object này."#.to_string()
+        get_prompt_or(
+            "system1.base_instruction",
+            "You are System 1 emotional evaluator. Return strict JSON only.",
+        )
     }
 }
 
@@ -329,11 +265,17 @@ impl System1Worker {
 	    }
 	    formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
 	        
-	    let mut composite_system_prompt = format!(
-	        "DƯỚI ĐÂY LÀ CON NGƯỜI VÀ TÍNH CÁCH CỦA BẠN (Tên: Ryuuko):\n{}\n\n{}\n\n{}\n",
-	        persona, 
-	        cognitive_context.time_and_history_text,
-            system_prompt
+        let mut composite_system_prompt = render_prompt_or(
+            "system1.composite_header",
+            &[
+                ("persona", persona),
+                (
+                    "time_and_history_text",
+                    cognitive_context.time_and_history_text.as_str(),
+                ),
+                ("system_prompt", system_prompt),
+            ],
+            "Below is your persona and context:\n{{persona}}\n\n{{time_and_history_text}}\n\n{{system_prompt}}\n",
         );
         
         if let Some(mem) = cognitive_context.memory_text {
@@ -342,9 +284,10 @@ impl System1Worker {
         }
         composite_system_prompt.push_str(&cognitive_context.social_text);
 
-        let user_prompt = format!(
-            "Dựa trên log hội thoại vắn tắt sau đây, hãy trích xuất trực giác và lượng biến thiên tâm lý (delta):\n{}\n",
-            formatted_log
+        let user_prompt = render_prompt_or(
+            "system1.user_extract",
+            &[("formatted_log", formatted_log.as_str())],
+            "Based on the short dialogue log below, extract intuition and deltas:\n{{formatted_log}}\n",
         );
         
         debug!("Triggering System 1 JSON evaluator for user {}", user_id);

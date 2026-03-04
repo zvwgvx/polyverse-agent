@@ -1,0 +1,20 @@
+{
+  "prompts": {
+    "persona.base": "prompts/persona/base.txt",
+    "persona.fallback_short": "prompts/persona/fallback_short.txt",
+    "system1.base_instruction": "prompts/system1/base_instruction.txt",
+    "system1.composite_header": "prompts/system1/composite_header.txt",
+    "system1.user_extract": "prompts/system1/user_extract.txt",
+    "context.memory.header": "prompts/context/memory_header.txt",
+    "context.memory.item": "prompts/context/memory_item.txt",
+    "context.social.known": "prompts/context/social_known.txt",
+    "context.social.default": "prompts/context/social_default.txt",
+    "context.session.first_known": "prompts/context/first_msg_known.txt",
+    "context.session.first_unknown": "prompts/context/first_msg_unknown.txt",
+    "context.session.has_history": "prompts/context/has_history.txt",
+    "llm.fallback": "prompts/llm/fallback.txt",
+    "memory.compressor.time_block": "prompts/memory/compressor_time_block.txt",
+    "memory.compressor.diary_cmd": "prompts/memory/compressor_diary_cmd.txt",
+    "memory.chatlog.wrapper": "prompts/memory/chatlog_wrapper.txt"
+  }
+}

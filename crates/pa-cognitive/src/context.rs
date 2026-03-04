@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use pa_core::prompt_registry::render_prompt_or;
 use pa_memory::{
     episodic::EpisodicStore,
     embedder::MemoryEmbedder,
@@ -37,12 +38,20 @@ pub async fn build_shared_cognitive_context(
         if let Ok(query_vec) = emb.embed_single(search_query).await {
             if let Ok(events) = ep.search(&query_vec, 3, 0.5).await {
                 if !events.is_empty() {
-                    let mut text = String::from("### TỰ SUY NGHĨ (KÝ ỨC CŨ): Những thông tin sau có thể liên quan đến ngữ cảnh cuộc trò chuyện. Hãy linh hoạt sử dụng nếu thấy cần thiết (KHÔNG nhắc lại nguyên văn):\n");
+                    let mut text = render_prompt_or(
+                        "context.memory.header",
+                        &[],
+                        "### SELF REFLECTION (PAST MEMORY): Use information below only if relevant.\n",
+                    );
                     for ev in events {
                         let date_str = chrono::DateTime::from_timestamp(ev.timestamp, 0)
                             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
                             .unwrap_or_else(|| "Unknown date".to_string());
-                        text.push_str(&format!("- [Vào {}]: {}\n", date_str, ev.content));
+                        text.push_str(&render_prompt_or(
+                            "context.memory.item",
+                            &[("date", date_str.as_str()), ("content", ev.content.as_str())],
+                            "- [At {{date}}]: {{content}}\n",
+                        ));
                     }
                     memory_text = Some(text);
                 }
@@ -57,65 +66,49 @@ pub async fn build_shared_cognitive_context(
     };
     let memory_hint = (lancedb_count as f32 / 200.0).min(0.15);
 
-    let mut social_text = format!(
-        "### TRẠNG THÁI CẢM XÚC, QUAN HỆ & BỐI CẢNH VỚI {}:\n", 
-        current_username
-    );
-    
+    let social_text;
+
     if let Ok((attitudes, illusion)) = graph.get_social_context(current_username).await {
         let graph_depth = (attitudes.affinity.abs() + attitudes.attachment.abs() 
             + attitudes.trust.abs() + attitudes.safety.abs()) / 4.0;
         let context_depth = (graph_depth + memory_hint).min(1.0);
+        let affinity = format!("{:.6}", attitudes.affinity);
+        let attachment = format!("{:.6}", attitudes.attachment);
+        let trust = format!("{:.6}", attitudes.trust);
+        let safety = format!("{:.6}", attitudes.safety);
+        let tension = format!("{:.6}", attitudes.tension);
+        let depth = format!("{:.6}", context_depth);
+        let ill_affinity = format!("{:.6}", illusion.affinity);
+        let ill_attachment = format!("{:.6}", illusion.attachment);
+        let ill_trust = format!("{:.6}", illusion.trust);
+        let ill_safety = format!("{:.6}", illusion.safety);
+        let ill_tension = format!("{:.6}", illusion.tension);
 
-        social_text.push_str(&format!(
-            "- Mức độ Hảo cảm (Affinity): {:.6} (-1 ghét tởm, 1 yêu quý)\n",
-            attitudes.affinity
-        ));
-        social_text.push_str(&format!(
-            "- Độ thân thiết/Bám dính (Attachment): {:.6} (-1 né tránh, 1 bám lấy)\n",
-            attitudes.attachment
-        ));
-        social_text.push_str(&format!(
-            "- Niềm tin (Trust): {:.6} (-1 nghi ngờ, 1 tin tưởng tuyệt đối)\n",
-            attitudes.trust
-        ));
-        social_text.push_str(&format!(
-            "- Cảm giác An toàn (Safety): {:.6} (-1 sợ hãi/deft, 1 an tâm)\n",
-            attitudes.safety
-        ));
-        social_text.push_str(&format!(
-            "- Độ căng thẳng (Tension): {:.6} (0 thoải mái, 1 áp lực/tức giận)\n",
-            attitudes.tension
-        ));
-        social_text.push_str(&format!(
-            "- Độ sâu Bối cảnh (Context Depth): {:.6} (0.0 người lạ mới quen, 1.0 bạn tâm giao lâu năm)\n\n",
-            context_depth
-        ));
-        
-        social_text.push_str(&format!(
-            "Lưu ý: Bạn (Ryuuko) đang có ảo tưởng rằng {} cảm nhận về bạn như sau:\n",
-            current_username
-        ));
-        social_text.push_str(&format!(
-            "- Họ thích/ghét bạn (Affinity): {:.6} | Thân thiết (Attachment): {:.6} | Tin tưởng (Trust): {:.6} | An toàn (Safety): {:.6} | Căng thẳng (Tension): {:.6}\n",
-            illusion.affinity, illusion.attachment, illusion.trust, illusion.safety, illusion.tension
-        ));
+        social_text = render_prompt_or(
+            "context.social.known",
+            &[
+                ("username", current_username),
+                ("affinity", affinity.as_str()),
+                ("attachment", attachment.as_str()),
+                ("trust", trust.as_str()),
+                ("safety", safety.as_str()),
+                ("tension", tension.as_str()),
+                ("context_depth", depth.as_str()),
+                ("ill_affinity", ill_affinity.as_str()),
+                ("ill_attachment", ill_attachment.as_str()),
+                ("ill_trust", ill_trust.as_str()),
+                ("ill_safety", ill_safety.as_str()),
+                ("ill_tension", ill_tension.as_str()),
+            ],
+            "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: {{affinity}}\nAttachment: {{attachment}}\nTrust: {{trust}}\nSafety: {{safety}}\nTension: {{tension}}\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: {{ill_affinity}}, Attachment: {{ill_attachment}}, Trust: {{ill_trust}}, Safety: {{ill_safety}}, Tension: {{ill_tension}}\n",
+        );
     } else {
-        social_text.push_str("- Mức độ Hảo cảm (Affinity): 0.000000 (-1 ghét tởm, 1 yêu quý)\n");
-        social_text.push_str("- Độ thân thiết/Bám dính (Attachment): 0.000000 (-1 né tránh, 1 bám lấy)\n");
-        social_text.push_str("- Niềm tin (Trust): 0.000000 (-1 nghi ngờ, 1 tin tưởng tuyệt đối)\n");
-        social_text.push_str("- Cảm giác An toàn (Safety): 0.000000 (-1 sợ hãi/deft, 1 an tâm)\n");
-        social_text.push_str("- Độ căng thẳng (Tension): 0.000000 (0 thoải mái, 1 áp lực/tức giận)\n");
-        social_text.push_str(&format!(
-            "- Độ sâu Bối cảnh (Context Depth): {:.6} (0.0 người lạ mới quen, 1.0 bạn tâm giao lâu năm)\n\n",
-            memory_hint
-        ));
-        
-        social_text.push_str(&format!(
-            "Lưu ý: Bạn (Ryuuko) đang có ảo tưởng rằng {} cảm nhận về bạn như sau:\n",
-            current_username
-        ));
-        social_text.push_str("- Họ thích/ghét bạn (Affinity): 0.000000 | Thân thiết (Attachment): 0.000000 | Tin tưởng (Trust): 0.000000 | An toàn (Safety): 0.000000 | Căng thẳng (Tension): 0.000000\n");
+        let depth = format!("{:.6}", memory_hint);
+        social_text = render_prompt_or(
+            "context.social.default",
+            &[("username", current_username), ("context_depth", depth.as_str())],
+            "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: 0.000000\nAttachment: 0.000000\nTrust: 0.000000\nSafety: 0.000000\nTension: 0.000000\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: 0.000000, Attachment: 0.000000, Trust: 0.000000, Safety: 0.000000, Tension: 0.000000\n",
+        );
     }
 
     let now = chrono::Utc::now();
@@ -130,14 +123,16 @@ pub async fn build_shared_cognitive_context(
 
     if history.is_empty() {
         if lancedb_count > 0 {
-            time_and_history_text.push_str(&format!(
-                "[context: đây là tin nhắn đầu tiên của phiên trò chuyện mới. người dùng ({}) là người quen cũ, hãy dựa vào đồ thị bối cảnh phía trên để cư xử phù hợp.]",
-                current_username
+            time_and_history_text.push_str(&render_prompt_or(
+                "context.session.first_known",
+                &[("username", current_username)],
+                "[context: this is the first message of a new session. user ({{username}}) is already known.]",
             ));
         } else {
-            time_and_history_text.push_str(&format!(
-                "[context: đây là tin nhắn đầu tiên từ {}. mày chưa biết người này — đây là người lạ. Hãy cẩn trọng.]",
-                current_username
+            time_and_history_text.push_str(&render_prompt_or(
+                "context.session.first_unknown",
+                &[("username", current_username)],
+                "[context: this is the first message from {{username}}. this user is unknown. be cautious.]",
             ));
         }
     } else {
@@ -148,10 +143,15 @@ pub async fn build_shared_cognitive_context(
             }
         }
         let users_vec: Vec<&str> = users.into_iter().collect();
-        time_and_history_text.push_str(&format!(
-            "[context: đã có {} tin nhắn trước đó trong cuộc hội thoại này. người tham gia: {}. hãy trả lời dựa trên mạch hội thoại ở trên.]",
-            history.len(),
-            users_vec.join(", ")
+        let history_len = history.len().to_string();
+        let participants = users_vec.join(", ");
+        time_and_history_text.push_str(&render_prompt_or(
+            "context.session.has_history",
+            &[
+                ("history_len", history_len.as_str()),
+                ("participants", participants.as_str()),
+            ],
+            "[context: there were {{history_len}} previous messages. participants: {{participants}}.]",
         ));
     }
 

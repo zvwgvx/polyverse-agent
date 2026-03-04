@@ -1,0 +1,4 @@
+📅 [CURRENT TIME AT DIARY GENERATION]:
+- UTC/GMT: {{utc_time}}
+- Agent local time (GMT+8): {{agent_time}}
+- User local time (GMT+7): {{user_time}}
