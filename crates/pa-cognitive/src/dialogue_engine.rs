@@ -21,7 +21,7 @@ use pa_memory::{
 };
 
 #[derive(Debug, Clone)]
-pub struct LlmConfig {
+pub struct DialogueEngineConfig {
     pub api_base: String,
     pub api_key: String,
     pub model: String,
@@ -29,7 +29,7 @@ pub struct LlmConfig {
     pub reasoning: Option<String>,
 }
 
-impl LlmConfig {
+impl DialogueEngineConfig {
     pub fn is_valid(&self) -> bool {
         !self.api_base.is_empty()
             && !self.api_key.is_empty()
@@ -87,8 +87,8 @@ struct ApiErrorDetail {
     r#type: Option<String>,
 }
 
-pub struct LlmWorker {
-    pub config: LlmConfig,
+pub struct DialogueEngineWorker {
+    pub config: DialogueEngineConfig,
     status: WorkerStatus,
     http_client: Client,
     pub system_prompt: String,
@@ -98,8 +98,8 @@ pub struct LlmWorker {
     pub graph: Option<CognitiveGraph>,
 }
 
-impl LlmWorker {
-    pub fn new(config: LlmConfig) -> Self {
+impl DialogueEngineWorker {
+    pub fn new(config: DialogueEngineConfig) -> Self {
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -151,7 +151,7 @@ impl LlmWorker {
                     e
                 );
                 pa_core::prompt_registry::get_prompt_or(
-                    "llm.fallback",
+                    "dialogue_engine.fallback",
                     "You are Ryuuko, an AI chatbot.\nReply briefly and naturally.\n",
                 )
             }
@@ -170,22 +170,22 @@ impl LlmWorker {
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .send()
             .await
-            .context("Failed to connect to LLM API")?;
+            .context("Failed to connect to dialogue engine API")?;
 
         if response.status().is_success() {
             info!(
                 api_base = %self.config.api_base,
                 model = %self.config.model,
-                "LLM API connection validated"
+                "Dialogue engine API connection validated"
             );
             Ok(())
         } else if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-            Err(anyhow::anyhow!("LLM API authentication failed — check your API key"))
+            Err(anyhow::anyhow!("Dialogue engine API authentication failed — check your API key"))
         } else {
             warn!(
                 status = %response.status(),
                 api_base = %self.config.api_base,
-                "LLM API /models endpoint returned error (API may still work for chat)"
+                "Dialogue engine API /models endpoint returned error (API may still work for chat)"
             );
             Ok(())
         }
@@ -193,20 +193,20 @@ impl LlmWorker {
 }
 
 #[async_trait]
-impl Worker for LlmWorker {
+impl Worker for DialogueEngineWorker {
     fn name(&self) -> &str {
-        "llm"
+        "dialogue_engine"
     }
 
     async fn start(&mut self, ctx: WorkerContext) -> Result<()> {
         info!(
             api_base = %self.config.api_base,
             model = %self.config.model,
-            "LLM worker starting..."
+            "Dialogue engine worker starting..."
         );
 
         if !self.config.is_valid() {
-            warn!("LLM config is incomplete, disabling LLM worker");
+            warn!("Dialogue engine config is incomplete, disabling dialogue engine worker");
             self.status = WorkerStatus::Stopped;
             return Ok(());
         }
@@ -214,17 +214,17 @@ impl Worker for LlmWorker {
         match self.validate_connection().await {
             Ok(_) => {}
             Err(e) if e.to_string().contains("authentication") => {
-                warn!(error = %e, "LLM API auth failed, disabling LLM worker");
+                warn!(error = %e, "Dialogue engine API auth failed, disabling Dialogue engine worker");
                 self.status = WorkerStatus::Stopped;
                 return Ok(());
             }
             Err(e) => {
-                warn!(error = %e, "LLM API validation failed — will try anyway");
+                warn!(error = %e, "Dialogue engine API validation failed — will try anyway");
             }
         }
 
         self.status = WorkerStatus::Healthy;
-        info!("LLM worker ready");
+        info!("Dialogue engine worker ready");
 
         let mut broadcast_rx = ctx.subscribe_events();
         let mut shutdown_rx = ctx.subscribe_shutdown();
@@ -251,7 +251,7 @@ impl Worker for LlmWorker {
                                 user = %raw.username,
                                 platform = %raw.platform,
                                 content = %raw.content,
-                                "Processing mention — sending to LLM"
+                                "Processing mention — sending to dialogue engine"
                             );
 
                             let history = if let Some(ref stm) = short_term {
@@ -280,7 +280,7 @@ impl Worker for LlmWorker {
                             let username = raw_clone.username.clone();
 
                             active_tasks.spawn(async move {
-                                let result = Self::call_llm(
+                                let result = Self::call_dialogue_engine(
                                     &http_client,
                                     &cfg,
                                     &sys,
@@ -298,7 +298,7 @@ impl Worker for LlmWorker {
                                     error!(
                                         error = ?e,
                                         user = %username,
-                                        "LLM request failed"
+                                        "Dialogue engine request failed"
                                     );
                                 }
                             });
@@ -306,16 +306,16 @@ impl Worker for LlmWorker {
                         Ok(_) => {
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            warn!(missed = n, "LLM broadcast receiver lagged");
+                            warn!(missed = n, "Dialogue engine broadcast receiver lagged");
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            info!("LLM broadcast channel closed");
+                            info!("Dialogue engine broadcast channel closed");
                             break;
                         }
                     }
                 }
                 _ = shutdown_rx.recv() => {
-                    info!("LLM worker received shutdown signal");
+                    info!("Dialogue engine worker received shutdown signal");
                     break;
                 }
             }
@@ -324,12 +324,12 @@ impl Worker for LlmWorker {
         active_tasks.abort_all();
 
         self.status = WorkerStatus::Stopped;
-        info!("LLM worker stopped");
+        info!("Dialogue engine worker stopped");
         Ok(())
     }
 
     async fn stop(&mut self) -> Result<()> {
-        info!("LLM worker stopping...");
+        info!("Dialogue engine worker stopping...");
         self.status = WorkerStatus::Stopped;
         Ok(())
     }
@@ -339,10 +339,10 @@ impl Worker for LlmWorker {
     }
 }
 
-impl LlmWorker {
-    async fn call_llm(
+impl DialogueEngineWorker {
+    async fn call_dialogue_engine(
         http_client: &reqwest::Client,
-        config: &LlmConfig,
+        config: &DialogueEngineConfig,
         system_prompt: &str,
         history: Vec<(String, String, String)>,
         episodic: Arc<EpisodicStore>,
@@ -429,19 +429,19 @@ impl LlmWorker {
             .json(&request)
             .send()
             .await
-            .context("Failed to send request to LLM API")?;
+            .context("Failed to send request to dialogue engine API")?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
                 return Err(anyhow::anyhow!(
-                    "LLM API error ({}): {}",
+                    "Dialogue engine API error ({}): {}",
                     status,
                     api_err.error.message
                 ));
             }
-            return Err(anyhow::anyhow!("LLM API error ({}): {}", status, body));
+            return Err(anyhow::anyhow!("Dialogue engine API error ({}): {}", status, body));
         }
 
         let mut stream = response.bytes_stream();
@@ -494,7 +494,7 @@ impl LlmWorker {
                                             info!(
                                                 user = %raw_event.username,
                                                 content = %msg,
-                                                "LLM stream emitted line"
+                                                "Dialogue engine stream emitted line"
                                             );
                                             full_response_buffer.push_str(&msg);
                                             full_response_buffer.push('\n');
@@ -526,7 +526,7 @@ impl LlmWorker {
             info!(
                 user = %raw_event.username,
                 content = %final_msg,
-                "LLM stream emitted final line"
+                "Dialogue engine stream emitted final line"
             );
             full_response_buffer.push_str(&final_msg);
             let event = Event::Response(ResponseEvent {

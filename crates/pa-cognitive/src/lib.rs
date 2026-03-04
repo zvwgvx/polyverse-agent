@@ -1,6 +1,6 @@
 pub mod context;
-pub mod llm;
+pub mod dialogue_engine;
 pub mod affect_evaluator;
 
-pub use llm::{LlmConfig, LlmWorker};
+pub use dialogue_engine::{DialogueEngineConfig, DialogueEngineWorker};
 pub use affect_evaluator::{AffectEvaluatorConfig, AffectEvaluatorWorker};

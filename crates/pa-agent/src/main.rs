@@ -6,7 +6,9 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use pa_cognitive::{AffectEvaluatorConfig, AffectEvaluatorWorker, LlmConfig, LlmWorker};
+use pa_cognitive::{
+    AffectEvaluatorConfig, AffectEvaluatorWorker, DialogueEngineConfig, DialogueEngineWorker,
+};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
@@ -21,8 +23,8 @@ struct Config {
     telegram: TelegramConfig,
     #[serde(default)]
     agent: AgentConfig,
-    #[serde(default)]
-    llm: LlmFileConfig,
+    #[serde(default, alias = "llm")]
+    dialogue_engine: DialogueEngineFileConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -67,7 +69,7 @@ impl Default for AgentConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct LlmFileConfig {
+struct DialogueEngineFileConfig {
     #[serde(default)]
     api_base: String,
     #[serde(default)]
@@ -108,7 +110,7 @@ fn load_config() -> Result<Config> {
             discord_selfbot: DiscordSelfbotConfig::default(),
             telegram: TelegramConfig::default(),
             agent: AgentConfig::default(),
-            llm: LlmFileConfig::default(),
+            dialogue_engine: DialogueEngineFileConfig::default(),
         }
     };
 
@@ -135,17 +137,29 @@ fn load_config() -> Result<Config> {
         config.agent.log_level = level;
     }
 
-    if let Ok(base) = std::env::var("SYS2_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")) {
-        config.llm.api_base = base;
+    if let Ok(base) = std::env::var("DIALOGUE_ENGINE_API_BASE")
+        .or_else(|_| std::env::var("OPENAI_API_BASE"))
+        .or_else(|_| std::env::var("API_BASE"))
+    {
+        config.dialogue_engine.api_base = base;
     }
-    if let Ok(key) = std::env::var("SYS2_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")) {
-        config.llm.api_key = key;
+    if let Ok(key) = std::env::var("DIALOGUE_ENGINE_API_KEY")
+        .or_else(|_| std::env::var("OPENAI_API_KEY"))
+        .or_else(|_| std::env::var("API_KEY"))
+    {
+        config.dialogue_engine.api_key = key;
     }
-    if let Ok(model) = std::env::var("SYS2_MODEL").or_else(|_| std::env::var("OPENAI_MODEL")).or_else(|_| std::env::var("MODEL")) {
-        config.llm.model = model;
+    if let Ok(model) = std::env::var("DIALOGUE_ENGINE_MODEL")
+        .or_else(|_| std::env::var("OPENAI_MODEL"))
+        .or_else(|_| std::env::var("MODEL"))
+    {
+        config.dialogue_engine.model = model;
     }
-    if let Ok(reasoning) = std::env::var("SYS2_REASONING").or_else(|_| std::env::var("OPENAI_REASONING")).or_else(|_| std::env::var("REASONING")) {
-        config.llm.reasoning = Some(reasoning);
+    if let Ok(reasoning) = std::env::var("DIALOGUE_ENGINE_REASONING")
+        .or_else(|_| std::env::var("OPENAI_REASONING"))
+        .or_else(|_| std::env::var("REASONING"))
+    {
+        config.dialogue_engine.reasoning = Some(reasoning);
     }
 
     Ok(config)
@@ -237,22 +251,22 @@ async fn main() -> Result<()> {
         .parse::<u32>()
         .unwrap_or(2048);
 
-    let llm_config = LlmConfig {
-        api_base: config.llm.api_base.clone(),
-        api_key: config.llm.api_key.clone(),
-        model: config.llm.model.clone(),
+    let dialogue_engine_config = DialogueEngineConfig {
+        api_base: config.dialogue_engine.api_base.clone(),
+        api_key: config.dialogue_engine.api_key.clone(),
+        model: config.dialogue_engine.model.clone(),
         chat_max_tokens,
-        reasoning: config.llm.reasoning.clone(),
+        reasoning: config.dialogue_engine.reasoning.clone(),
     };
 
-    if llm_config.is_valid() {
+    if dialogue_engine_config.is_valid() {
         info!(
-            api_base = %llm_config.api_base,
-            model = %llm_config.model,
-            "Registering LLM worker"
+            api_base = %dialogue_engine_config.api_base,
+            model = %dialogue_engine_config.model,
+            "Registering dialogue engine worker"
         );
         supervisor.register(
-            LlmWorker::new(llm_config)
+            DialogueEngineWorker::new(dialogue_engine_config)
                 .with_memory(Arc::clone(&short_term_handle))
                 .with_episodic(Arc::clone(&episodic))
                 .with_embedder(Arc::clone(&embedder))
@@ -260,7 +274,9 @@ async fn main() -> Result<()> {
         );
         worker_count += 1;
     } else {
-        warn!("LLM not configured (set API_BASE, API_KEY, MODEL in .env)");
+        warn!(
+            "Dialogue engine not configured (set DIALOGUE_ENGINE_API_BASE, DIALOGUE_ENGINE_API_KEY, DIALOGUE_ENGINE_MODEL in .env)"
+        );
     }
 
     if let (Ok(base), Ok(key), Ok(model)) = (

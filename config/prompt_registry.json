@@ -12,7 +12,7 @@
     "context.session.first_known": "prompts/context/first_msg_known.txt",
     "context.session.first_unknown": "prompts/context/first_msg_unknown.txt",
     "context.session.has_history": "prompts/context/has_history.txt",
-    "llm.fallback": "prompts/llm/fallback.txt",
+    "dialogue_engine.fallback": "prompts/dialogue_engine/fallback.txt",
     "memory.compressor.time_block": "prompts/memory/compressor_time_block.txt",
     "memory.compressor.diary_cmd": "prompts/memory/compressor_diary_cmd.txt",
     "memory.chatlog.wrapper": "prompts/memory/chatlog_wrapper.txt"
