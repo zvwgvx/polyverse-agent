@@ -5,7 +5,6 @@ use pa_memory::{
     graph::CognitiveGraph,
 };
 
-/// A shared cognitive context built for both System 1 and System 2.
 pub struct SharedCognitiveContext {
     pub memory_text: Option<String>,
     pub social_text: String,
@@ -20,7 +19,6 @@ pub async fn build_shared_cognitive_context(
     current_username: &str,
     new_message: &str,
 ) -> SharedCognitiveContext {
-    // 1. RAG Memory (Hồi Hải Mã)
     let mut memory_text = None;
     if let (Some(ep), Some(emb)) = (episodic, embedder) {
         let recent_context = history.iter()
@@ -52,9 +50,6 @@ pub async fn build_shared_cognitive_context(
         }
     }
 
-    // 2. Context Depth and Social Weight (Nhận thức Cảm xúc & Bối cảnh)
-    // Primary: graph weights (naturally slow, decayed — best measure of relationship depth)
-    // Secondary: small LanceDB memory hint (shared memories exist)
     let lancedb_count = if let Some(ep) = episodic {
         ep.count_user_chunks(current_username).await.unwrap_or(0_usize)
     } else {
@@ -68,7 +63,6 @@ pub async fn build_shared_cognitive_context(
     );
     
     if let Ok((attitudes, illusion)) = graph.get_social_context(current_username).await {
-        // context_depth derived from accumulated graph weights + small memory bonus
         let graph_depth = (attitudes.affinity.abs() + attitudes.attachment.abs() 
             + attitudes.trust.abs() + attitudes.safety.abs()) / 4.0;
         let context_depth = (graph_depth + memory_hint).min(1.0);
@@ -124,7 +118,6 @@ pub async fn build_shared_cognitive_context(
         social_text.push_str("- Họ thích/ghét bạn (Affinity): 0.000000 | Thân thiết (Attachment): 0.000000 | Tin tưởng (Trust): 0.000000 | An toàn (Safety): 0.000000 | Căng thẳng (Tension): 0.000000\n");
     }
 
-    // 3. Current Time and Short-Term Context summary
     let now = chrono::Utc::now();
     let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
     let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());

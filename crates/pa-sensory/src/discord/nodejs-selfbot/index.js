@@ -1,7 +1,7 @@
 const { Client } = require('discord.js-selfbot-v13');
 const WebSocket = require('ws');
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '../../../../../.env') }); // Reaches back to project root
+require('dotenv').config({ path: path.resolve(__dirname, '../../../../../.env') });
 
 const DISCORD_SELFBOT_TOKEN = process.env.DISCORD_SELFBOT_TOKEN;
 if (!DISCORD_SELFBOT_TOKEN) {
@@ -16,17 +16,16 @@ let consecutiveConnectionFailures = 0;
 const MAX_FAILURES = 3;
 
 const client = new Client({
-    checkUpdate: false, // Don't check for selfbot updates on startup
+    checkUpdate: false,
 });
 
 function connectWebSocket() {
-    // Tối ưu hoá cực mạnh: Tắt nén tin nhắn (perMessageDeflate: false) để gửi packet ngay lập tức không qua tầng zlib
     ws = new WebSocket(WS_URL, { perMessageDeflate: false });
 
     ws.on('open', () => {
         console.log(`[Selfbot] Connected to Core WebSocket at ${WS_URL}`);
         wsConnected = true;
-        consecutiveConnectionFailures = 0; // Reset counter on successful connection
+        consecutiveConnectionFailures = 0;
     });
 
     ws.on('message', async (data) => {
@@ -49,7 +48,7 @@ function connectWebSocket() {
                             console.log(`[Selfbot] Replied to ${reply_to_message_id} in ${channel_id}`);
                         } catch (e) {
                             console.error(`[Selfbot] Could not reply to ${reply_to_message_id}:`, e.message);
-                            await channel.send(content); // fallback if message not found
+                            await channel.send(content);
                         }
                     } else {
                         await channel.send(content);
@@ -89,7 +88,6 @@ client.on('ready', async () => {
 });
 
 client.on('messageCreate', async (msg) => {
-    // Only process messages in the specified channel OR direct messages from a specific user
     const isAllowedChannel = msg.channelId === '1410283966992351363';
     const isAllowedDm = !msg.guildId && msg.author.id === '1320303839701897230';
 
@@ -97,7 +95,6 @@ client.on('messageCreate', async (msg) => {
         return;
     }
 
-    // Ignore our own messages to prevent infinite loops
     if (msg.author.id === client.user.id) {
         return;
     }
@@ -107,9 +104,6 @@ client.on('messageCreate', async (msg) => {
     let isMention = false;
     let isDm = !msg.guildId;
 
-    // Check for EXPLICIT mention (user typed @bot in the message text)
-    // vs IMPLICIT mention (Discord auto-adds when replying to bot's message)
-    // We only want to respond to EXPLICIT mentions to avoid double-responding
     const hasExplicitMention = msg.content.includes(`<@${client.user.id}>`) ||
         msg.content.includes(`<@!${client.user.id}>`);
 

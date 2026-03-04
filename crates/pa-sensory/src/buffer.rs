@@ -11,7 +11,6 @@ pub enum BufferMsg {
     Typing,
 }
 
-/// Key to uniquely identify a typing session
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct BufferKey {
     pub platform: Platform,
@@ -29,14 +28,10 @@ impl BufferKey {
     }
 }
 
-/// The Sensory Buffer acts as a debounce layer to prevent context fragmentation.
-/// It catches raw events and groups them by user/channel within a sliding 3-second window.
 #[derive(Clone)]
-#[repr(align(64))] // Tối ưu hoá cực mạnh: Căn lề L1 cache line 64bytes để chống False Sharing giữa các CPU thread
+#[repr(align(64))]
 pub struct SensoryBuffer {
-    /// Maps a session to an active tokio task's sender channel
     active_sessions: Arc<Mutex<HashMap<BufferKey, mpsc::Sender<BufferMsg>>>>,
-    /// The global event bus transmitter to send completed aggregated events
     event_tx: mpsc::Sender<Event>,
 }
 
@@ -48,30 +43,24 @@ impl SensoryBuffer {
         }
     }
 
-    /// Push an incoming raw event into the buffer.
-    /// If a session exists, it concatenates. Otherwise, assigns a new actor task.
     pub async fn push(&self, raw: RawEvent) {
         let key = BufferKey::from_raw(&raw);
         let mut sessions = self.active_sessions.lock().await;
 
         if let Some(tx) = sessions.get(&key) {
-            // Give message to existing actor task
             if let Err(e) = tx.send(BufferMsg::Event(raw.clone())).await {
                 debug!(error = %e, "Failed to send message to buffer actor, it might have just died");
-                // The task closed, fall through to create a new one.
             } else {
-                return; // Sent successfully
+                return;
             }
         }
 
-        // Create new session channel
         let (tx, rx) = mpsc::channel(100);
         sessions.insert(key.clone(), tx.clone());
         
         let sessions_clone = Arc::clone(&self.active_sessions);
         let event_tx = self.event_tx.clone();
         
-        // Push the very first message into its own actor
         let _ = tx.send(BufferMsg::Event(raw)).await;
 
         tokio::spawn(async move {
@@ -79,7 +68,6 @@ impl SensoryBuffer {
         });
     }
 
-    /// Extends the timeout if a session already exists. If not, does nothing.
     pub async fn typing(&self, platform: Platform, channel_id: String, user_id: String) {
         let key = BufferKey {
             platform,
@@ -93,7 +81,6 @@ impl SensoryBuffer {
         }
     }
 
-    /// Actor loop: waits for contiguous messages and emits upon a 3-second timeout silence.
     async fn debounce_actor(
         key: BufferKey,
         mut rx: mpsc::Receiver<BufferMsg>,
@@ -118,11 +105,9 @@ impl SensoryBuffer {
                             } else {
                                 aggregated = Some(new_msg);
                             }
-                            // Reset deadline
                             deadline = tokio::time::Instant::now() + Duration::from_secs(3);
                         }
                         Some(BufferMsg::Typing) => {
-                            // Reset deadline to give them more time
                             deadline = tokio::time::Instant::now() + Duration::from_secs(4);
                             debug!(
                                 user_id = %key.user_id,
@@ -130,32 +115,27 @@ impl SensoryBuffer {
                             );
                         }
                         None => {
-                            // Channel closed
                             break;
                         }
                     }
                 }
                 _ = tokio::time::sleep_until(deadline) => {
-                    // Timeout hit because deadline was reached
                     break;
                 }
             }
         }
 
-        // Cleanup self from HashMap so future messages spawn a new actor
         {
             let mut sm = sessions_map.lock().await;
             sm.remove(&key);
         }
 
-        // Fire the aggregated chunk onto the actual event bus!
         if let Some(mut final_msg) = aggregated {
             debug!(
                 user = %final_msg.username,
                 content_len = final_msg.content.len(),
                 "Flushing aggregated sensory buffer"
             );
-            // We trim trailing whitespaces
             final_msg.content = final_msg.content.trim().to_string();
             let _ = event_tx.send(Event::Raw(final_msg)).await;
         }

@@ -15,26 +15,14 @@ use crate::episodic::{EpisodicStore, MemoryEvent};
 use crate::embedder::MemoryEmbedder;
 use crate::compressor::SemanticCompressor;
 
-/// Memory worker: integrates short-term (RAM) and SQLite store.
-///
-/// Listens for ALL events on broadcast:
-/// - RawEvent → normalize to MemoryMessage → push into short-term + persist
-/// - ResponseEvent → record Ryuuko's response in short-term + persist
-///
-/// Also provides context retrieval for the LLM worker via shared handle.
 pub struct MemoryWorker {
-    /// Short-term memory (shared with LLM worker for context retrieval)
     pub short_term: Arc<Mutex<ShortTermMemory>>,
-    /// Episodic Store
     pub episodic: Option<Arc<EpisodicStore>>,
     pub embedder: Option<Arc<MemoryEmbedder>>,
     pub compressor: Option<Arc<SemanticCompressor>>,
-    /// Database path
     db_path: String,
 }
 
-// Safety: MemoryStore is NOT held in the struct (it lives inside start()).
-// Only Arc<Mutex<ShortTermMemory>> and String are held — both Send+Sync.
 unsafe impl Sync for MemoryWorker {}
 
 impl MemoryWorker {
@@ -63,13 +51,10 @@ impl MemoryWorker {
         self
     }
 
-    /// Get a shared reference to short-term memory.
-    /// Used by LLM worker to retrieve conversation context.
     pub fn short_term_handle(&self) -> Arc<Mutex<ShortTermMemory>> {
         Arc::clone(&self.short_term)
     }
 
-    /// Spawns a background task to compress, embed, and store an expired session into Episodic Store.
     fn ingest_session(
         messages: Vec<MemoryMessage>,
         compressor: Arc<SemanticCompressor>,
@@ -154,7 +139,6 @@ impl Worker for MemoryWorker {
     async fn start(&mut self, ctx: WorkerContext) -> Result<()> {
         info!("Memory worker starting...");
 
-        // Create data directory if it doesn't exist
         if let Some(parent) = std::path::Path::new(&self.db_path).parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent)?;
@@ -172,7 +156,7 @@ impl Worker for MemoryWorker {
         if let Ok(recent) = store.get_recent_all(500) {
             let mut stm = self.short_term.lock().await;
             stm.load_history(recent);
-            stm.mark_all_persisted(); // Don't re-ingest into RAG on expire
+            stm.mark_all_persisted();
             info!("Loaded recent history into short-term memory");
         }
 
@@ -184,7 +168,6 @@ impl Worker for MemoryWorker {
         let mut shutdown_rx = ctx.subscribe_shutdown();
         let short_term = Arc::clone(&self.short_term);
 
-        // Periodic flush timer (check for expired sessions every 60s)
         let mut flush_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
 
         info!("Memory worker ready");
@@ -194,7 +177,6 @@ impl Worker for MemoryWorker {
                 event = broadcast_rx.recv() => {
                     match event {
                         Ok(Event::Raw(raw)) => {
-                            // Only store messages directed at Ryuuko (DM, tag, reply)
                             if !raw.is_mention {
                                 debug!(
                                     user = %raw.username,
@@ -212,20 +194,16 @@ impl Worker for MemoryWorker {
                                 "Recording mention/DM to memory"
                             );
 
-                            // Push to short-term, check for expired session
                             let expired = {
                                 let mut stm = short_term.lock().await;
                                 stm.push(msg.clone())
                             };
 
-                            // Persist current message
                             if let Err(e) = store.insert(&msg) {
                                 error!(error = %e, "Failed to persist message");
                             }
 
-                            // Persist expired session messages (batch) — skip insert, already individual
                             if let Some(expired_msgs) = expired {
-                                // Only ingest into RAG (no re-insert to SQLite)
                                 if let Some(comp) = &compressor {
                                     Self::ingest_session(
                                         expired_msgs,
@@ -237,7 +215,6 @@ impl Worker for MemoryWorker {
                             }
                         }
                         Ok(Event::BotTurnCompletion(complete)) => {
-                            // Record Ryuuko's full responses to memory
                             let msg = MemoryMessage::bot_response(
                                 complete.platform,
                                 complete.channel_id.clone(),
@@ -258,7 +235,7 @@ impl Worker for MemoryWorker {
                                 error!(error = %e, "Failed to persist bot turn completion");
                             }
                         }
-                        Ok(_) => {} // Ignore other events
+                        Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(missed = n, "Memory broadcast receiver lagged");
                         }
@@ -269,7 +246,6 @@ impl Worker for MemoryWorker {
                     }
                 }
                 _ = flush_interval.tick() => {
-                    // Periodically flush expired sessions
                     let expired = {
                         let mut stm = short_term.lock().await;
                         stm.flush_expired()
@@ -279,10 +255,8 @@ impl Worker for MemoryWorker {
                         info!(
                             conversation = %key,
                             messages = messages.len(),
-                            "Session expired, flushed to store"
-                        );
-                        // These messages were already persisted individually
-                        // Only ingest into RAG (LanceDB)
+                                "Session expired, flushed to store"
+                            );
                         if let Some(comp) = &compressor {
                             Self::ingest_session(
                                 messages,

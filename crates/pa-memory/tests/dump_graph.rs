@@ -4,10 +4,8 @@ use anyhow::Result;
 async fn test_full_roundtrip() -> Result<()> {
     let graph = pa_memory::graph::CognitiveGraph::new("data/ryuuko_graph").await?;
     
-    // Clean slate
     graph.db.query("DELETE attitudes_towards:ryuuko_roundtrip; DELETE illusion_of:roundtrip_ryuuko;").await?;
     
-    // Step 1: First write
     println!("=== First write ===");
     let delta1 = pa_memory::graph::SocialDelta {
         delta_affinity: 0.15,
@@ -23,7 +21,6 @@ async fn test_full_roundtrip() -> Result<()> {
         att1.affinity, att1.attachment, att1.trust, att1.safety, att1.tension);
     assert!((att1.affinity - 0.15).abs() < 0.001, "Expected 0.15, got {}", att1.affinity);
     
-    // Step 2: Accumulate
     println!("\n=== Second write (accumulate) ===");
     let delta2 = pa_memory::graph::SocialDelta {
         delta_affinity: 0.10,
@@ -43,7 +40,6 @@ async fn test_full_roundtrip() -> Result<()> {
     
     println!("\n✅ All assertions passed! Delta accumulation works!");
     
-    // Clean up
     graph.db.query("DELETE attitudes_towards:ryuuko_roundtrip;").await?;
     
     Ok(())

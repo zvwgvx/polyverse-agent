@@ -3,37 +3,24 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Errors that can occur during state transitions.
 #[derive(Debug, Error)]
 pub enum StateError {
     #[error("Invalid transition from {from} to {to}")]
     InvalidTransition { from: AgentState, to: AgentState },
 }
 
-/// The top-level state of the Polyverse Agent.
-///
-/// This enum represents the lifecycle + operational states of the agent.
-/// Transitions are validated — not every state can transition to every other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentState {
-    /// Agent is booting up, workers being registered.
     Initializing,
-    /// Agent is running but not actively processing any event.
     Idle,
-    /// Agent is actively processing an incoming event (SLM or routing).
     Processing,
-    /// Agent has delegated to Cloud LLM and is waiting for a response.
     WaitingForCloud,
-    /// Agent has lost internet connectivity, running in local-only mode.
     Offline,
-    /// Agent is performing memory consolidation during idle time.
     Consolidating,
-    /// Agent is gracefully shutting down.
     ShuttingDown,
 }
 
 impl AgentState {
-    /// Returns the set of valid states this state can transition to.
     pub fn valid_transitions(&self) -> &[AgentState] {
         use AgentState::*;
         match self {
@@ -43,11 +30,10 @@ impl AgentState {
             WaitingForCloud => &[Processing, Idle, Offline, ShuttingDown],
             Offline => &[Idle, Processing, ShuttingDown],
             Consolidating => &[Idle, Processing, Offline, ShuttingDown],
-            ShuttingDown => &[], // terminal state
+            ShuttingDown => &[],
         }
     }
 
-    /// Attempt to transition to a new state. Returns error if the transition is invalid.
     pub fn transition_to(&self, next: AgentState) -> Result<AgentState, StateError> {
         if self.valid_transitions().contains(&next) {
             Ok(next)
@@ -59,7 +45,6 @@ impl AgentState {
         }
     }
 
-    /// Whether this is a terminal state (no further transitions possible).
     pub fn is_terminal(&self) -> bool {
         self.valid_transitions().is_empty()
     }

@@ -14,17 +14,9 @@ use tracing::{debug, error, info, warn};
 use crate::buffer::SensoryBuffer;
 use crate::platform::PlatformAdapter;
 
-/// Discord sensory worker powered by serenity.
-///
-/// Listens to Discord messages and emits RawEvents into the event bus.
-/// Also listens for ResponseEvents on the broadcast channel and sends
-/// replies back to Discord.
 pub struct DiscordWorker {
-    /// Discord bot token
     token: String,
-    /// Worker status
     status: WorkerStatus,
-    /// Shared context handle (for sending messages from PlatformAdapter methods)
     http: Arc<RwLock<Option<Arc<serenity::http::Http>>>>,
 }
 
@@ -38,11 +30,9 @@ impl DiscordWorker {
     }
 }
 
-/// Internal serenity event handler that bridges Discord events into our event bus.
 struct DiscordHandler {
     buffer: SensoryBuffer,
     http_store: Arc<RwLock<Option<Arc<serenity::http::Http>>>>,
-    /// The bot's own user ID (set on ready), used to detect mentions.
     bot_user_id: Arc<RwLock<Option<serenity::model::id::UserId>>>,
 }
 
@@ -56,7 +46,6 @@ impl EventHandler for DiscordHandler {
             "Discord bot connected"
         );
 
-        // Store the HTTP client and bot user ID
         {
             let mut http = self.http_store.write().await;
             *http = Some(Arc::clone(&ctx.http));
@@ -68,17 +57,14 @@ impl EventHandler for DiscordHandler {
     }
 
     async fn message(&self, _ctx: Context, msg: Message) {
-        // Tạm thời chỉ cho phép bot hoạt động ở đúng 1 channel ID này
         if msg.channel_id.to_string() != "1410283966992351363" {
             return;
         }
 
-        // Ignore messages from bots (including ourselves)
         if msg.author.bot {
             return;
         }
 
-        // Check if this is a DM (private channel) or if the bot is mentioned
         let is_dm = msg.guild_id.is_none();
         let is_mention = is_dm || {
             let bot_id = self.bot_user_id.read().await;
@@ -118,7 +104,6 @@ impl EventHandler for DiscordHandler {
             timestamp: chrono::Utc::now(),
         };
 
-        // Push RawEvent into the Sensory Buffer for debounce & aggregation
         self.buffer.push(raw).await;
     }
 
@@ -126,8 +111,6 @@ impl EventHandler for DiscordHandler {
         let user_id = event.user_id.to_string();
         let channel_id = event.channel_id.to_string();
         
-        // We do not know if the typing is in DM or Server from this event alone usually,
-        // but we just pass the ids.
         self.buffer.typing(Platform::Discord, channel_id, user_id).await;
     }
 }
@@ -141,7 +124,6 @@ impl Worker for DiscordWorker {
     async fn start(&mut self, ctx: WorkerContext) -> Result<()> {
         info!("Discord worker starting...");
 
-        // Validate token format early (Discord tokens have a specific structure)
         if self.token.is_empty()
             || self.token == "YOUR_DISCORD_BOT_TOKEN"
             || self.token.starts_with("your_")
@@ -151,10 +133,8 @@ impl Worker for DiscordWorker {
             return Ok(());
         }
 
-        // Instantiate sensory buffer
         let buffer = SensoryBuffer::new(ctx.event_tx.clone());
 
-        // Prepare context and handler
         let http_store = Arc::clone(&self.http);
         let bot_user_id = Arc::new(RwLock::new(None));
         let handler = DiscordHandler {
@@ -183,7 +163,6 @@ impl Worker for DiscordWorker {
 
         self.status = WorkerStatus::Healthy;
 
-        // Listen for ResponseEvents on the broadcast channel and send them to Discord
         let http_clone = Arc::clone(&self.http);
         let mut broadcast_rx = ctx.subscribe_events();
         tokio::spawn(async move {
@@ -203,11 +182,9 @@ impl Worker for DiscordWorker {
                                 let channel =
                                     serenity::model::id::ChannelId::new(channel_id);
 
-                                // Build message — reply to original if we have the ID
                                 let mut builder =
                                     CreateMessage::new().content(&response.content);
 
-                                // Reply-tag only in group channels, skip in DMs
                                 if !response.is_dm {
                                     if let Some(ref reply_id) = response.reply_to_message_id {
                                         if let Ok(msg_id) = reply_id.parse::<u64>() {
@@ -248,12 +225,11 @@ impl Worker for DiscordWorker {
                         info!("Discord broadcast channel closed");
                         break;
                     }
-                    _ => {} // Ignore non-Response events
+                    _ => {}
                 }
             }
         });
 
-        // Run the Discord client (blocks until shutdown)
         let mut shutdown_rx = ctx.subscribe_shutdown();
         tokio::select! {
             result = client.start() => {
@@ -266,7 +242,7 @@ impl Worker for DiscordWorker {
                             "Discord authentication failed — invalid token, disabling Discord worker"
                         );
                         self.status = WorkerStatus::Stopped;
-                        return Ok(()); // Graceful — don't crash
+                        return Ok(());
                     }
                     Err(e) => {
                         error!(error = %e, "Discord client error");

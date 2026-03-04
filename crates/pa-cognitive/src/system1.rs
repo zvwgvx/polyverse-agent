@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use pa_core::event::{Event, RawEvent, Platform};
+use pa_core::event::Event;
 use pa_core::worker::{Worker, WorkerContext, WorkerStatus};
 use pa_memory::graph::{CognitiveGraph, SocialDelta, EmotionDelta};
 use pa_memory::short_term::ShortTermMemory;
@@ -11,8 +11,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
-
-// ─── Config ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct System1Config {
@@ -27,8 +25,6 @@ impl System1Config {
         !self.api_base.is_empty() && !self.api_key.is_empty() && !self.model.is_empty()
     }
 }
-
-// ─── API Types ───────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 struct ChatRequest {
@@ -99,7 +95,6 @@ struct IllusionDeltaReq {
 struct ObservedDynamic {
     from_user: String,
     to_user: String,
-    observation: String,
     estimated_tension: f32,
 }
 
@@ -110,8 +105,6 @@ struct EntityUpdate {
     delta_stress: f32,
     delta_fascination: f32,
 }
-
-// ─── Worker ──────────────────────────────────────────────────
 
 pub struct System1Worker {
     pub config: System1Config,
@@ -258,15 +251,14 @@ impl Worker for System1Worker {
                 Some(_) = active_tasks.join_next() => {}
                 result = broadcast_rx.recv() => {
                     match result {
-                        Ok(Event::Raw(raw)) if raw.is_mention => {
-                            let user_id = raw.username.clone();
-                            let key = ConversationKey::from_raw(&raw);
-                            
-                            // Get history from short term memory
-                            let history = {
-                                let stm = short_term.lock().await;
-                                stm.get_history_for_prompt(&key, &raw.message_id)
-                            };
+	                        Ok(Event::Raw(raw)) if raw.is_mention => {
+	                            let user_id = raw.username.clone();
+	                            let key = ConversationKey::from_raw(&raw);
+	                            
+	                            let history = {
+	                                let stm = short_term.lock().await;
+	                                stm.get_history_for_prompt(&key, &raw.message_id)
+	                            };
                             
                             let target_user = user_id.clone();
                             let current_msg = raw.content.clone();
@@ -276,14 +268,13 @@ impl Worker for System1Worker {
                             let pp = persona_prompt.clone();
                             let g = graph.clone();
                             
-                            let e = self.episodic.clone();
-                            let em = self.embedder.clone();
-                            
-                            // Spawn evaluate
-                            active_tasks.spawn(async move {
-                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, history, &current_msg, e, em).await;
-                            });
-                        }
+	                            let e = self.episodic.clone();
+	                            let em = self.embedder.clone();
+	                            
+	                            active_tasks.spawn(async move {
+	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, history, &current_msg, e, em).await;
+	                            });
+	                        }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -325,25 +316,23 @@ impl System1Worker {
         let cognitive_context = crate::context::build_shared_cognitive_context(
             &history,
             episodic.as_ref(),
-            embedder.as_ref(),
-            graph,
-            user_id,
-            current_msg,
-        ).await;
-        
-        // System 1 trigger is concurrent with System 2, so append the current message manually
-        let mut formatted_log = String::new();
-        for (role, user, content) in history.iter().rev().take(4).rev() {
-            let name = if role == "assistant" { "Ryuuko" } else { user.as_str() };
-            formatted_log.push_str(&format!("{}: {}\n", name, content));
-        }
-        formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
-        
-        // Construct standard unified prompt
-        let mut composite_system_prompt = format!(
-            "DƯỚI ĐÂY LÀ CON NGƯỜI VÀ TÍNH CÁCH CỦA BẠN (Tên: Ryuuko):\n{}\n\n{}\n\n{}\n",
-            persona, 
-            cognitive_context.time_and_history_text,
+	        embedder.as_ref(),
+	        graph,
+	        user_id,
+	        current_msg,
+	    ).await;
+	        
+	    let mut formatted_log = String::new();
+	    for (role, user, content) in history.iter().rev().take(4).rev() {
+	        let name = if role == "assistant" { "Ryuuko" } else { user.as_str() };
+	        formatted_log.push_str(&format!("{}: {}\n", name, content));
+	    }
+	    formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
+	        
+	    let mut composite_system_prompt = format!(
+	        "DƯỚI ĐÂY LÀ CON NGƯỜI VÀ TÍNH CÁCH CỦA BẠN (Tên: Ryuuko):\n{}\n\n{}\n\n{}\n",
+	        persona, 
+	        cognitive_context.time_and_history_text,
             system_prompt
         );
         
@@ -396,27 +385,25 @@ impl System1Worker {
             Ok(b) => b,
             Err(_) => return,
         };
-        
-        let content_str = body["choices"][0]["message"]["content"].as_str().unwrap_or("{}");
-        
-        // Try parsing JSON block
-        let clean_json = if content_str.starts_with("```json") {
-            let s = content_str.trim_start_matches("```json").trim_end_matches("```");
-            s
-        } else {
+	        
+	        let content_str = body["choices"][0]["message"]["content"].as_str().unwrap_or("{}");
+	        
+	        let clean_json = if content_str.starts_with("```json") {
+	            let s = content_str.trim_start_matches("```json").trim_end_matches("```");
+	            s
+	        } else {
             content_str
         };
         
         let parsed: Result<System1ResponseFormat, _> = serde_json::from_str(clean_json);
-        match parsed {
-            Ok(data) => {
-                debug!("System 1 evaluation completed");
-                
-                // Process social updates (R -> U and U -> R)
-                for social in data.social_updates {
-                    let s_delta = SocialDelta {
-                        delta_affinity: social.actual_perception_delta.delta_affinity,
-                        delta_attachment: social.actual_perception_delta.delta_attachment,
+	        match parsed {
+	            Ok(data) => {
+	                debug!("System 1 evaluation completed");
+	                
+	                for social in data.social_updates {
+	                    let s_delta = SocialDelta {
+	                        delta_affinity: social.actual_perception_delta.delta_affinity,
+	                        delta_attachment: social.actual_perception_delta.delta_attachment,
                         delta_trust: social.actual_perception_delta.delta_trust,
                         delta_safety: social.actual_perception_delta.delta_safety,
                         delta_tension: social.actual_perception_delta.delta_tension,
@@ -438,24 +425,22 @@ impl System1Worker {
                             if let Err(e) = graph.update_illusion_graph(&social.target_user, i_delta).await {
                                 error!("Failed to update illusion graph for {}: {}", social.target_user, e);
                             }
+	                        }
+	                    }
+	                }
+	                
+	                if let Some(dynamics) = data.observed_dynamics {
+	                    for dyn_update in dynamics {
+	                        if let Err(e) = graph.update_observed_dynamic(&dyn_update.from_user, &dyn_update.to_user, dyn_update.estimated_tension).await {
+	                            error!("Failed to update observed dynamics: {}", e);
                         }
-                    }
-                }
-                
-                // Process observed dynamics (U1 -> U2)
-                if let Some(dynamics) = data.observed_dynamics {
-                    for dyn_update in dynamics {
-                        if let Err(e) = graph.update_observed_dynamic(&dyn_update.from_user, &dyn_update.to_user, dyn_update.estimated_tension).await {
-                            error!("Failed to update observed dynamics: {}", e);
-                        }
-                    }
-                }
-                
-                // Process entity updates (R -> E)
-                if let Some(entities) = data.entity_updates {
-                    for entity in entities {
-                        let e_delta = EmotionDelta {
-                            entity_name: entity.entity_name.clone(),
+	                    }
+	                }
+	                
+	                if let Some(entities) = data.entity_updates {
+	                    for entity in entities {
+	                        let e_delta = EmotionDelta {
+	                            entity_name: entity.entity_name.clone(),
                             delta_preference: entity.delta_preference,
                             delta_stress: entity.delta_stress,
                             delta_fascination: entity.delta_fascination,

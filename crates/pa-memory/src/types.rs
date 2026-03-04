@@ -2,37 +2,21 @@ use chrono::{DateTime, Utc};
 use pa_core::event::{Platform, RawEvent};
 use serde::{Deserialize, Serialize};
 
-/// A normalized message stored in memory.
-/// Converted from RawEvent with additional metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryMessage {
-    /// Unique message ID (from the platform)
     pub id: String,
-    /// Source platform
     pub platform: Platform,
-    /// Channel / chat ID
     pub channel_id: String,
-    /// User who sent the message
     pub user_id: String,
-    /// Display name
     pub username: String,
-    /// Message text
     pub content: String,
-    /// Whether this was a mention/DM (triggered LLM response)
     pub is_mention: bool,
-    /// Whether this is Ryuuko's own response
     pub is_bot_response: bool,
-    /// Who Ryuuko is replying to (set on bot responses)
     pub reply_to_user: Option<String>,
-    /// When the message was received
     pub timestamp: DateTime<Utc>,
-    /// Importance score (0.0 - 1.0)
-    /// Higher = more likely to be included in prompt
     pub importance: f32,
 }
 
-/// Key to identify a conversation (platform + channel).
-/// All messages in the same conversation share the same key.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationKey {
     pub platform: Platform,
@@ -62,7 +46,6 @@ impl std::fmt::Display for ConversationKey {
 }
 
 impl MemoryMessage {
-    /// Create a MemoryMessage from a RawEvent with computed importance.
     pub fn from_raw(raw: &RawEvent) -> Self {
         let importance = Self::compute_importance(raw);
 
@@ -81,7 +64,6 @@ impl MemoryMessage {
         }
     }
 
-    /// Create a MemoryMessage for Ryuuko's own response.
     pub fn bot_response(
         platform: Platform,
         channel_id: String,
@@ -104,22 +86,18 @@ impl MemoryMessage {
         }
     }
 
-    /// Compute importance score based on message characteristics.
     fn compute_importance(raw: &RawEvent) -> f32 {
-        let mut score: f32 = 0.3; // Base score for any message
+        let mut score: f32 = 0.3;
 
-        // DM / mention = more important (directed at Ryuuko)
         if raw.is_mention {
             score += 0.4;
         }
 
-        // Longer messages tend to carry more info
         let word_count = raw.content.split_whitespace().count();
         if word_count > 10 {
             score += 0.1;
         }
 
-        // Questions are important (contain ?)
         if raw.content.contains('?') {
             score += 0.1;
         }
@@ -127,8 +105,6 @@ impl MemoryMessage {
         score.min(1.0)
     }
 
-    /// Strip Discord mention tags (e.g. `<@123456>`) from message content.
-    /// Returns the cleaned content, trimmed of leading/trailing whitespace.
     fn strip_mention_tags(content: &str) -> String {
         let mut result = String::with_capacity(content.len());
         let chars: Vec<char> = content.chars().collect();
@@ -137,7 +113,6 @@ impl MemoryMessage {
             if chars[i] == '<' && i + 1 < chars.len() && chars[i + 1] == '@' {
                 if let Some(end) = chars[i..].iter().position(|&c| c == '>') {
                     i += end + 1;
-                    // Skip following space
                     while i < chars.len() && chars[i] == ' ' {
                         i += 1;
                     }
@@ -173,7 +148,7 @@ mod tests {
         assert_eq!(msg.id, "m1");
         assert!(msg.is_mention);
         assert!(!msg.is_bot_response);
-        assert!(msg.importance >= 0.7); // mention bonus
+        assert!(msg.importance >= 0.7);
     }
 
     #[test]

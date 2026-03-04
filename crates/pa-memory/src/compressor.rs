@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, header};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct CompressionResult {
@@ -11,7 +10,6 @@ pub struct CompressionResult {
 pub struct SemanticCompressor {
     client: Client,
     api_base: String,
-    api_key: String,
     model: String,
     semantic_max_tokens: u32,
 }
@@ -53,13 +51,11 @@ impl SemanticCompressor {
         Ok(Self {
             client,
             api_base,
-            api_key,
             model,
             semantic_max_tokens,
         })
     }
 
-    /// Takes a chunk of raw conversation text and uses the SLM to extract a diary entry.
     pub async fn compress(&self, base_persona: &str, raw_transcript: &str) -> Result<Option<CompressionResult>> {
         let now = chrono::Utc::now();
         let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
@@ -131,7 +127,6 @@ impl SemanticCompressor {
                 return Ok(None);
             }
 
-            // JSON Sanitization: Trim markdown blocks like ```json ... ```
             let cleaned_content = raw_content
                 .trim()
                 .trim_start_matches("```json")
@@ -144,7 +139,6 @@ impl SemanticCompressor {
                 Ok(val) => {
                     let fact = val.get("diary_entry").and_then(|f| f.as_str()).unwrap_or("").to_string();
                     if !fact.is_empty() {
-                        // Dynamically assess importance: Assume diary entry conveys strong sentiment, default to 7.0 for now, could be dynamic later.
                         return Ok(Some(CompressionResult { fact, importance: 7.0 }));
                     } else {
                         return Ok(None);

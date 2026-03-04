@@ -11,10 +11,6 @@ use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
 
-// ─── Configuration ───────────────────────────────────────────
-
-/// Agent configuration.
-/// Priority: .env file → environment variables → config.toml → defaults
 #[derive(Debug, Deserialize)]
 struct Config {
     #[serde(default)]
@@ -70,7 +66,6 @@ impl Default for AgentConfig {
     }
 }
 
-/// LLM config from config.toml (can be overridden by env vars)
 #[derive(Debug, Default, Deserialize)]
 struct LlmFileConfig {
     #[serde(default)]
@@ -91,13 +86,7 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 
-/// Load configuration with the following priority:
-/// 1. `.env` file (loaded into process env vars via dotenvy)
-/// 2. Existing environment variables (override .env)
-/// 3. `config.toml` file (base config)
-/// 4. Defaults
 fn load_config() -> Result<Config> {
-    // Step 1: Load .env file (silently ignore if not found)
     match dotenvy::dotenv() {
         Ok(path) => info!(path = %path.display(), "Loaded .env file"),
         Err(dotenvy::Error::Io(_)) => {
@@ -106,7 +95,6 @@ fn load_config() -> Result<Config> {
         Err(e) => warn!(error = %e, "Failed to parse .env file"),
     }
 
-    // Step 2: Load config.toml as base
     let config_path =
         std::env::var("PA_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
 
@@ -123,8 +111,6 @@ fn load_config() -> Result<Config> {
             llm: LlmFileConfig::default(),
         }
     };
-
-    // Step 3: Environment variables OVERRIDE config.toml values
 
     if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
         config.discord_bot.token = token;
@@ -149,7 +135,6 @@ fn load_config() -> Result<Config> {
         config.agent.log_level = level;
     }
 
-    // LLM env overrides (SYS2 is the Conscious Roleplay model)
     if let Ok(base) = std::env::var("SYS2_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")) {
         config.llm.api_base = base;
     }
@@ -166,14 +151,10 @@ fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-// ─── Main ────────────────────────────────────────────────────
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load config (env + file)
     let config = load_config()?;
 
-    // Initialize tracing/logging
     let default_filter = format!("{},ort=warn,fastembed=warn,lance=warn", config.agent.log_level);
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(default_filter));
@@ -188,10 +169,8 @@ async fn main() -> Result<()> {
         "=== Polyverse Agent Starting ==="
     );
 
-    // Create supervisor
     let mut supervisor = Supervisor::new();
 
-    // Register sensory workers based on config
     let mut worker_count = 0;
 
     if config.discord_bot.enabled && !config.discord_bot.token.is_empty() {
@@ -240,7 +219,6 @@ async fn main() -> Result<()> {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
     }
 
-    // Register Memory worker (always — memory is core)
     let mut memory_worker = MemoryWorker::new("data/ryuuko_memory.db")
         .with_episodic(Arc::clone(&episodic))
         .with_embedder(Arc::clone(&embedder));
@@ -254,7 +232,6 @@ async fn main() -> Result<()> {
     worker_count += 1;
     info!("Registered Memory worker");
 
-    // Register LLM worker
     let chat_max_tokens = std::env::var("CHAT_MAX_TOKENS")
         .unwrap_or_else(|_| "2048".to_string())
         .parse::<u32>()
@@ -286,7 +263,6 @@ async fn main() -> Result<()> {
         warn!("LLM not configured (set API_BASE, API_KEY, MODEL in .env)");
     }
 
-    // Register System 1 Evaluator
     if let (Ok(base), Ok(key), Ok(model)) = (
         std::env::var("SYS1_API_BASE").or_else(|_| std::env::var("OPENAI_API_BASE")).or_else(|_| std::env::var("API_BASE")),
         std::env::var("SYS1_API_KEY").or_else(|_| std::env::var("OPENAI_API_KEY")).or_else(|_| std::env::var("API_KEY")),
@@ -324,12 +300,10 @@ async fn main() -> Result<()> {
         info!("Configure workers via .env file.");
     }
 
-    // Create and spawn the coordinator
     let broadcast_tx = supervisor.event_bus().broadcast_tx.clone();
     let shutdown_rx = supervisor.event_bus().shutdown_tx.subscribe();
     let mut coordinator = Coordinator::new(broadcast_tx);
 
-    // Take the event receiver from the bus — coordinator owns it
     let event_rx = supervisor
         .event_bus_mut()
         .take_event_rx()
@@ -341,7 +315,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start all workers
     supervisor.start_all().await?;
 
     info!(
@@ -350,11 +323,9 @@ async fn main() -> Result<()> {
     );
     info!("Press Ctrl+C to shutdown");
 
-    // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("Shutdown signal received");
 
-    // Graceful shutdown
     supervisor.shutdown().await?;
     coordinator_handle.abort();
 

@@ -7,7 +7,6 @@ use lancedb::{query::{ExecutableQuery, QueryBase}, Table};
 use std::sync::Arc;
 use futures::StreamExt;
 
-/// Represents a single chunk of memory in the episodic store.
 #[derive(Debug, Clone)]
 pub struct MemoryEvent {
     pub id: String,
@@ -23,7 +22,6 @@ pub struct EpisodicStore {
 }
 
 impl EpisodicStore {
-    /// Opens the LanceDB database and ensures the table exists.
     pub async fn open(uri: &str, table_name: &str) -> Result<Self> {
         let conn = lancedb::connect(uri).execute().await
             .context("Failed to connect to LanceDB")?;
@@ -63,7 +61,6 @@ impl EpisodicStore {
 
         let schema = Self::schema();
 
-        // Build arrays
         let id_array = StringArray::from(events.iter().map(|e| e.id.clone()).collect::<Vec<_>>());
         
         let mut vector_builder = arrow::array::FixedSizeListBuilder::new(
@@ -104,13 +101,11 @@ impl EpisodicStore {
         Ok(())
     }
 
-    /// Search the memory store with a query vector, applying time-weighted re-ranking.
-    /// Formula: Final_Score = Cosine_Similarity * e^(-λ * Δt_days) * Importance_Weight
     pub async fn search(
         &self,
         query_vector: &[f32],
         limit: usize,
-        lambda: f32, // e.g. 0.05
+        lambda: f32,
     ) -> Result<Vec<MemoryEvent>> {
         let mut stream = self.table
             .query()
@@ -124,7 +119,6 @@ impl EpisodicStore {
         while let Some(batch_res) = stream.next().await {
             let batch = batch_res?;
             
-            // Extract arrays
             let id_col = batch.column_by_name("id").context("Missing id")?
                 .as_any().downcast_ref::<StringArray>().context("id not a string")?;
             let vector_col = batch.column_by_name("vector").context("Missing vector")?
@@ -160,19 +154,15 @@ impl EpisodicStore {
 
         let now = chrono::Utc::now().timestamp();
         
-        // Re-ranking based on time and importance
         candidates.sort_by(|(a, dist_a), (b, dist_b)| {
             let score_a = calculate_final_score(*dist_a, a.timestamp, a.importance, now, lambda);
             let score_b = calculate_final_score(*dist_b, b.timestamp, b.importance, now, lambda);
-            // Sort descending: highest score first
             score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Take top K
         Ok(candidates.into_iter().take(limit).map(|(event, _)| event).collect())
     }
 
-    /// Count total memory chunks stored for a specific user
     pub async fn count_user_chunks(&self, username: &str) -> Result<usize> {
         let filter_expr = format!("metadata LIKE '%\"username\":\"{}\"%'", username);
         let mut stream = self.table
@@ -193,8 +183,6 @@ impl EpisodicStore {
 }
 
 fn calculate_final_score(distance: f32, timestamp: i64, importance: f32, now: i64, lambda: f32) -> f32 {
-    // LanceDB usually returns L2 distance. Cosine similarity is roughly 1 - (L2^2) / 2 if normalized.
-    // Let similarity = 1.0 / (1.0 + distance)
     let similarity = 1.0 / (1.0 + distance);
     let dt_seconds = (now - timestamp).max(0);
     let dt_days = dt_seconds as f32 / 86400.0;

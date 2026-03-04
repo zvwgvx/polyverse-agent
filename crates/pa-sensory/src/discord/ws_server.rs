@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::net::SocketAddr;
 use async_trait::async_trait;
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
@@ -14,12 +13,10 @@ use pa_core::{
 };
 use crate::buffer::SensoryBuffer;
 
-// ─── JSON Payload Contracts ──────────────────────────────────────
-
 #[derive(Debug, Deserialize)]
 struct WsIncomingPayload {
     #[serde(rename = "type")]
-    payload_type: String, // "message"
+    payload_type: String,
     data: WsIncomingData,
 }
 
@@ -37,8 +34,8 @@ struct WsIncomingData {
 #[derive(Debug, Serialize)]
 struct WsOutgoingPayload {
     #[serde(rename = "type")]
-    payload_type: String, // "response"
-    data: WsOutgoingData, // Wait, maybe it's better to structure this like the response event
+    payload_type: String,
+    data: WsOutgoingData,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,8 +45,6 @@ struct WsOutgoingData {
     reply_to_message_id: Option<String>,
     is_typing: bool,
 }
-
-// ─── Worker Definition ──────────────────────────────────────────
 
 pub struct SelfbotWsWorker {
     port: u16,
@@ -94,18 +89,15 @@ impl Worker for SelfbotWsWorker {
 
         let buffer = Arc::new(SensoryBuffer::new(ctx.event_tx.clone()));
 
-        // Setup TCP Listener
         let addr = format!("127.0.0.1:{}", self.port);
         let listener = TcpListener::bind(&addr).await?;
         info!("WebSocket server listening on {}", addr);
 
-        // Shared outgoing sender channel for the active connection
         let (bus_tx, mut _bus_rx) = tokio::sync::mpsc::channel::<Message>(100);
         let active_ws_tx = Arc::new(RwLock::new(Some(bus_tx)));
 
         let mut broadcast_rx = ctx.subscribe_events();
 
-        // Handle incoming responses from the Event Bus and route to the internal channel
         let ws_tx_clone = Arc::clone(&active_ws_tx);
         tokio::spawn(async move {
             loop {
@@ -122,7 +114,7 @@ impl Worker for SelfbotWsWorker {
                                 channel_id: response.channel_id,
                                 content: response.content,
                                 reply_to_message_id: response.reply_to_message_id,
-                                is_typing: false, // For now
+                                is_typing: false,
                             };
 
                             let payload = WsOutgoingPayload {
@@ -145,12 +137,11 @@ impl Worker for SelfbotWsWorker {
                         info!("Discord WS broadcast channel closed");
                         break;
                     }
-                    _ => {} // Ignore non-Response events
+                    _ => {}
                 }
             }
         });
 
-        // Connection acceptor loop
         let buffer_clone = Arc::clone(&buffer);
         
         tokio::spawn(async move {
@@ -201,7 +192,6 @@ async fn handle_connection(
     buffer: Arc<SensoryBuffer>,
     active_ws_tx: Arc<RwLock<Option<tokio::sync::mpsc::Sender<Message>>>>,
 ) {
-    // Tối ưu hoá cực mạnh: Tắt Nagle's algorithm (TCP_NODELAY) để giảm độ trễ gửi gói tin nhỏ xuống mức 0
     if let Err(e) = stream.set_nodelay(true) {
         warn!("Failed to set TCP_NODELAY: {}", e);
     }
@@ -217,16 +207,13 @@ async fn handle_connection(
 
     let (mut write, mut read) = ws_stream.split();
 
-    // Create a local channel to send messages to this connection
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(100);
     
-    // Register our sender in the global state
     {
         let mut lock = active_ws_tx.write().await;
         *lock = Some(tx);
     }
     
-    // Spawn a task to forward messages from the global state to our websocket writer
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = write.send(msg).await {
@@ -236,7 +223,6 @@ async fn handle_connection(
         }
     });
 
-    // The read loop
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
@@ -271,7 +257,6 @@ async fn handle_connection(
         }
     }
 
-    // Cleanup on disconnect
     {
         let mut lock = active_ws_tx.write().await;
         *lock = None;

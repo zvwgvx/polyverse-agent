@@ -4,14 +4,11 @@ use tracing::{debug, info};
 
 use crate::types::MemoryMessage;
 
-/// SQLite-based persistent storage for raw messages.
-/// Acts as a backup for short-term memory and source for future RAG.
 pub struct MemoryStore {
     conn: Connection,
 }
 
 impl MemoryStore {
-    /// Open or create the SQLite database at the given path.
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open memory database: {}", path))?;
@@ -23,7 +20,6 @@ impl MemoryStore {
         Ok(store)
     }
 
-    /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()
             .context("Failed to open in-memory database")?;
@@ -33,7 +29,6 @@ impl MemoryStore {
         Ok(store)
     }
 
-    /// Create tables if they don't exist.
     fn init_tables(&self) -> Result<()> {
         self.conn.execute_batch(
             "
@@ -64,7 +59,6 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Insert a message into the store.
     pub fn insert(&self, msg: &MemoryMessage) -> Result<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO messages
@@ -89,7 +83,6 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Insert a batch of messages.
     pub fn insert_batch(&self, messages: &[MemoryMessage]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         for msg in messages {
@@ -118,7 +111,6 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Get recent messages for a channel (for restoring short-term on startup).
     pub fn get_recent(
         &self,
         platform: &str,
@@ -157,19 +149,17 @@ impl MemoryStore {
                 content: row.get(5)?,
                 is_mention: row.get(6)?,
                 is_bot_response: row.get(7)?,
-                reply_to_user: None, // Not stored in this query for now
+                reply_to_user: None,
                 importance: row.get(8)?,
                 timestamp,
             })
         })?;
 
         let mut messages: Vec<MemoryMessage> = rows.filter_map(|r| r.ok()).collect();
-        // Reverse to get chronological order
         messages.reverse();
         Ok(messages)
     }
 
-    /// Get recent messages globally (for restoring short-term on startup).
     pub fn get_recent_all(&self, limit: usize) -> Result<Vec<MemoryMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, platform, channel_id, user_id, username, content,
@@ -213,7 +203,6 @@ impl MemoryStore {
         Ok(messages)
     }
 
-    /// Get total message count.
     pub fn message_count(&self) -> Result<i64> {
         let count: i64 =
             self.conn
@@ -276,7 +265,7 @@ mod tests {
 
         let msg = make_msg("m1", "ch1", "hello");
         store.insert(&msg).unwrap();
-        store.insert(&msg).unwrap(); // duplicate
+        store.insert(&msg).unwrap();
 
         assert_eq!(store.message_count().unwrap(), 1);
     }

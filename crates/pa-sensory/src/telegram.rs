@@ -7,16 +7,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::platform::PlatformAdapter;
 
-/// Telegram sensory worker powered by teloxide.
-///
-/// Listens to Telegram messages via long-polling and emits RawEvents
-/// into the event bus. Also handles outgoing responses.
 pub struct TelegramWorker {
-    /// Telegram bot token
     token: String,
-    /// Worker status
     status: WorkerStatus,
-    /// Bot instance (stored after start for sending messages)
     bot: Option<Bot>,
 }
 
@@ -39,7 +32,6 @@ impl Worker for TelegramWorker {
     async fn start(&mut self, ctx: WorkerContext) -> Result<()> {
         info!("Telegram worker starting...");
 
-        // Validate token format early
         if self.token.is_empty()
             || self.token == "YOUR_TELEGRAM_BOT_TOKEN"
             || self.token.starts_with("your_")
@@ -52,7 +44,6 @@ impl Worker for TelegramWorker {
         let bot = Bot::new(&self.token);
         self.bot = Some(bot.clone());
 
-        // Validate token by calling getMe — if invalid, disable gracefully
         let me = match bot.get_me().await {
             Ok(me) => me,
             Err(e) => {
@@ -62,7 +53,7 @@ impl Worker for TelegramWorker {
                 );
                 self.status = WorkerStatus::Stopped;
                 self.bot = None;
-                return Ok(()); // Graceful — don't crash
+                return Ok(());
             }
         };
 
@@ -76,7 +67,6 @@ impl Worker for TelegramWorker {
 
         let event_tx = ctx.event_tx.clone();
 
-        // Spawn the response listener (broadcast → Telegram)
         let bot_clone = bot.clone();
         let mut broadcast_rx = ctx.subscribe_events();
         tokio::spawn(async move {
@@ -115,8 +105,6 @@ impl Worker for TelegramWorker {
             }
         });
 
-        // Set up the message handler using teloxide's Dispatcher
-        // We pass bot_username to detect mentions (@botname)
         let buffer = crate::buffer::SensoryBuffer::new(event_tx.clone());
 
         let handler = Update::filter_message().endpoint(
@@ -124,7 +112,6 @@ impl Worker for TelegramWorker {
                   buffer: crate::buffer::SensoryBuffer,
                   bot_un: String| async move {
                 if let Some(text) = msg.text() {
-                    // Ignore telegram commands like /start
                     if text.starts_with('/') {
                         return Ok::<(), anyhow::Error>(());
                     }
@@ -140,7 +127,6 @@ impl Worker for TelegramWorker {
                         .map(|u| u.id.0.to_string())
                         .unwrap_or_default();
 
-                    // Detect DM (private chat) or mention (@botname)
                     let is_dm = msg.chat.is_private();
                     let mention_tag = format!("@{}", bot_un);
                     let is_mention = is_dm
@@ -198,7 +184,6 @@ impl Worker for TelegramWorker {
             .default_handler(|_| async {})
             .build();
 
-        // Run dispatcher until shutdown
         let mut shutdown_rx = ctx.subscribe_shutdown();
         let shutdown_token = dispatcher.shutdown_token();
 
