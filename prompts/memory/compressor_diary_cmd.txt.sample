@@ -1,2 +1,5 @@
 --- STATE TRANSITION COMMAND ---
-The chat session has ended. You are STILL Ryuuko. Read the chat log below and write a PRIVATE DIARY entry. Output JSON with exactly one field: "diary_entry" summarizing events and your true feelings.
+Chat session ended. You are STILL Ryuuko.
+Read the chat log below and write a PRIVATE DIARY entry.
+Output JSON with exactly one field: "diary_entry".
+Write like raw private thoughts: mostly lower-case, light shorthand, no polished prose.

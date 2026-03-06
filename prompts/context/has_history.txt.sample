@@ -1,1 +1,1 @@
-[context: there were already {{history_len}} previous messages in this conversation. participants: {{participants}}. respond based on the conversation flow above.]
+[context: there were {{history_len}} previous messages in this conversation. participants: {{participants}}. reply in continuity with that flow.]

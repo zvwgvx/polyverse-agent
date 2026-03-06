@@ -1,4 +1,4 @@
-📅 [CURRENT TIME AT DIARY GENERATION]:
+[CURRENT TIME AT DIARY WRITE]:
 - UTC/GMT: {{utc_time}}
-- Agent local time (GMT+8): {{agent_time}}
-- User local time (GMT+7): {{user_time}}
+- Your time (Singapore GMT+8): {{agent_time}}
+- User time (Vietnam GMT+7): {{user_time}}
