@@ -21,6 +21,15 @@ pub struct EpisodicStore {
     table: Table,
 }
 
+#[derive(Debug, Clone)]
+pub struct EpisodicEntry {
+    pub id: String,
+    pub content: String,
+    pub timestamp: i64,
+    pub importance: f32,
+    pub metadata: String,
+}
+
 impl EpisodicStore {
     pub async fn open(uri: &str, table_name: &str) -> Result<Self> {
         let conn = lancedb::connect(uri).execute().await
@@ -179,6 +188,73 @@ impl EpisodicStore {
         }
         
         Ok(count)
+    }
+
+    pub async fn count(&self) -> Result<usize> {
+        let mut stream = self.table.query().execute().await?;
+
+        let mut count = 0;
+        while let Some(batch_res) = stream.next().await {
+            if let Ok(batch) = batch_res {
+                count += batch.num_rows();
+            }
+        }
+
+        Ok(count)
+    }
+
+    pub async fn recent(&self, limit: usize) -> Result<Vec<EpisodicEntry>> {
+        let mut stream = self.table.query().execute().await?;
+        let mut entries = Vec::new();
+
+        while let Some(batch_res) = stream.next().await {
+            let batch = batch_res?;
+
+            let id_col = batch
+                .column_by_name("id")
+                .context("Missing id")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("id not a string")?;
+            let content_col = batch
+                .column_by_name("content")
+                .context("Missing content")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("content not a string")?;
+            let timestamp_col = batch
+                .column_by_name("timestamp")
+                .context("Missing timestamp")?
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .context("timestamp not i64")?;
+            let importance_col = batch
+                .column_by_name("importance")
+                .context("Missing importance")?
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .context("importance not f32")?;
+            let metadata_col = batch
+                .column_by_name("metadata")
+                .context("Missing metadata")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("metadata not string")?;
+
+            for i in 0..batch.num_rows() {
+                entries.push(EpisodicEntry {
+                    id: id_col.value(i).to_string(),
+                    content: content_col.value(i).to_string(),
+                    timestamp: timestamp_col.value(i),
+                    importance: importance_col.value(i),
+                    metadata: metadata_col.value(i).to_string(),
+                });
+            }
+        }
+
+        entries.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+        entries.truncate(limit);
+        Ok(entries)
     }
 }
 

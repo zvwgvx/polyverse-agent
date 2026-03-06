@@ -6,6 +6,8 @@ members = [
     "crates/pa-sensory",
     "crates/pa-cognitive",
     "crates/pa-memory",
+    "crates/pa-state",
+    "crates/pa-cockpit-api",
     "crates/pa-agent",
 ]
 

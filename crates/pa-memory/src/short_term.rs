@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use tracing::{debug, info};
 
 use crate::types::{ConversationKey, MemoryMessage};
@@ -51,6 +52,17 @@ impl Default for ShortTermConfig {
 pub struct ShortTermMemory {
     sessions: HashMap<ConversationKey, Session>,
     config: ShortTermConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveSessionSnapshot {
+    pub conversation: String,
+    pub platform: String,
+    pub channel_id: String,
+    pub message_count: usize,
+    pub started_at: DateTime<Utc>,
+    pub last_active: DateTime<Utc>,
+    pub participants: Vec<String>,
 }
 
 impl ShortTermMemory {
@@ -279,6 +291,47 @@ impl ShortTermMemory {
 
     pub fn total_messages(&self) -> usize {
         self.sessions.values().map(|s| s.messages.len()).sum()
+    }
+
+    pub fn active_sessions_snapshot(&self) -> Vec<ActiveSessionSnapshot> {
+        let mut snapshots: Vec<ActiveSessionSnapshot> = self
+            .sessions
+            .iter()
+            .map(|(key, session)| {
+                let mut participants: Vec<String> = session
+                    .messages
+                    .iter()
+                    .filter(|msg| !msg.is_bot_response)
+                    .map(|msg| msg.username.clone())
+                    .collect();
+                participants.sort();
+                participants.dedup();
+
+                ActiveSessionSnapshot {
+                    conversation: key.to_string(),
+                    platform: key.platform.to_string(),
+                    channel_id: key.channel_id.clone(),
+                    message_count: session.messages.len(),
+                    started_at: session.started_at,
+                    last_active: session.last_active,
+                    participants,
+                }
+            })
+            .collect();
+
+        snapshots.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        snapshots
+    }
+
+    pub fn recent_messages(&self, limit: usize) -> Vec<MemoryMessage> {
+        let mut messages: Vec<MemoryMessage> = self
+            .sessions
+            .values()
+            .flat_map(|session| session.messages.iter().cloned())
+            .collect();
+        messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        messages.truncate(limit);
+        messages
     }
 
     fn prompt_score(

@@ -9,9 +9,11 @@ use tracing_subscriber::EnvFilter;
 use pa_cognitive::{
     AffectEvaluatorConfig, AffectEvaluatorWorker, DialogueEngineConfig, DialogueEngineWorker,
 };
+use pa_cockpit_api::{CockpitApiConfig, CockpitWorker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
+use pa_state::StateStore;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -86,6 +88,13 @@ fn default_name() -> String {
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn parse_env_bool(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
 }
 
 fn load_config() -> Result<Config> {
@@ -186,6 +195,27 @@ async fn main() -> Result<()> {
     let mut supervisor = Supervisor::new();
 
     let mut worker_count = 0;
+    
+    let cockpit_enabled = parse_env_bool("COCKPIT_ENABLED", true);
+    let cockpit_bind = std::env::var("COCKPIT_BIND").unwrap_or_else(|_| "127.0.0.1:4787".to_string());
+    let cockpit_max_recent_events = std::env::var("COCKPIT_MAX_RECENT_EVENTS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(300);
+    let state_schema_path =
+        std::env::var("STATE_SCHEMA_PATH").unwrap_or_else(|_| "config/state_schema.v0.json".to_string());
+
+    let state_store = match StateStore::load_from_file(&state_schema_path) {
+        Ok(store) => Some(store),
+        Err(e) => {
+            warn!(
+                path = %state_schema_path,
+                error = %e,
+                "Failed to load state schema, cockpit state API will be disabled"
+            );
+            None
+        }
+    };
 
     if config.discord_bot.enabled && !config.discord_bot.token.is_empty() {
         info!("Registering Discord Bot worker");
@@ -233,7 +263,10 @@ async fn main() -> Result<()> {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
     }
 
-    let mut memory_worker = MemoryWorker::new("data/ryuuko_memory.db")
+    let memory_db_path =
+        std::env::var("MEMORY_DB_PATH").unwrap_or_else(|_| "data/ryuuko_memory.db".to_string());
+
+    let mut memory_worker = MemoryWorker::new(&memory_db_path)
         .with_episodic(Arc::clone(&episodic))
         .with_embedder(Arc::clone(&embedder));
     
@@ -245,6 +278,29 @@ async fn main() -> Result<()> {
     supervisor.register(memory_worker);
     worker_count += 1;
     info!("Registered Memory worker");
+
+    if cockpit_enabled {
+        if let Some(store) = state_store {
+            info!(bind = %cockpit_bind, "Registering local cockpit API worker");
+            supervisor.register(
+                CockpitWorker::new(
+                    CockpitApiConfig {
+                        enabled: true,
+                        bind_addr: cockpit_bind,
+                        max_recent_events: cockpit_max_recent_events,
+                    },
+                    store,
+                )
+                .with_memory_db_path(memory_db_path.clone())
+                .with_short_term(Arc::clone(&short_term_handle))
+                .with_episodic(Arc::clone(&episodic))
+                .with_graph(cognitive_graph.clone()),
+            );
+            worker_count += 1;
+        } else {
+            warn!("Cockpit is enabled but state schema is unavailable.");
+        }
+    }
 
     let chat_max_tokens = std::env::var("CHAT_MAX_TOKENS")
         .unwrap_or_else(|_| "2048".to_string())

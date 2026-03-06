@@ -28,6 +28,8 @@ Icon
 .cache/
 .npm/
 .fastembed_cache
+apps/**/node_modules/
+apps/**/.next/
 
 # Prompt secrets (custom runtime prompts)
 prompts/**/*.txt

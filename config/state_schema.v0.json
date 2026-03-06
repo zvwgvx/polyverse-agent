@@ -1,0 +1,155 @@
+{
+  "version": "0.1.0-mvp",
+  "dimensions": [
+    {
+      "id": "social.affinity",
+      "domain": "social",
+      "scope": "global",
+      "description": "Overall affinity tendency toward current interaction counterpart.",
+      "update_mode": "event",
+      "range_min": -1.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "social.attachment",
+      "domain": "social",
+      "scope": "global",
+      "description": "Attachment intensity toward ongoing relationship context.",
+      "update_mode": "event",
+      "range_min": -1.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "social.trust",
+      "domain": "social",
+      "scope": "global",
+      "description": "Trust baseline in current social context.",
+      "update_mode": "event",
+      "range_min": -1.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "social.safety",
+      "domain": "social",
+      "scope": "global",
+      "description": "Perceived emotional safety in conversation.",
+      "update_mode": "event",
+      "range_min": -1.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "social.tension",
+      "domain": "social",
+      "scope": "global",
+      "description": "Current social tension level.",
+      "update_mode": "event",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "preference.curiosity",
+      "domain": "preference",
+      "scope": "global",
+      "description": "Curiosity drive for exploring new topics.",
+      "update_mode": "drift",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.4
+    },
+    {
+      "id": "preference.fascination",
+      "domain": "preference",
+      "scope": "global",
+      "description": "Fascination intensity toward active topic cluster.",
+      "update_mode": "event",
+      "range_min": -1.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "preference.stress",
+      "domain": "preference",
+      "scope": "global",
+      "description": "Internal stress indicator used by response control.",
+      "update_mode": "drift",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.2
+    },
+    {
+      "id": "goal.current_focus",
+      "domain": "goal",
+      "scope": "global",
+      "description": "How strongly the agent is focused on the active objective.",
+      "update_mode": "event",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.5
+    },
+    {
+      "id": "goal.commitment",
+      "domain": "goal",
+      "scope": "global",
+      "description": "Persistence level for maintaining current objective.",
+      "update_mode": "event",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.6
+    },
+    {
+      "id": "goal.progress",
+      "domain": "goal",
+      "scope": "global",
+      "description": "Coarse progress marker for active objective.",
+      "update_mode": "derived",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "environment.load",
+      "domain": "environment",
+      "scope": "global",
+      "description": "Current environmental load from runtime activities.",
+      "update_mode": "derived",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "environment.noise",
+      "domain": "environment",
+      "scope": "global",
+      "description": "Signal-to-noise estimate from incoming events.",
+      "update_mode": "derived",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "user.familiarity",
+      "domain": "user",
+      "scope": "global",
+      "description": "Approximate familiarity with current user context.",
+      "update_mode": "event",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.0
+    },
+    {
+      "id": "emotion.stability",
+      "domain": "emotion",
+      "scope": "global",
+      "description": "Overall emotional stability estimate.",
+      "update_mode": "drift",
+      "range_min": 0.0,
+      "range_max": 1.0,
+      "default": 0.7
+    }
+  ]
+}

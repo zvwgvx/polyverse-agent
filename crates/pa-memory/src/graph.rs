@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct CognitiveGraph {
@@ -62,6 +63,48 @@ pub struct FeelsAbout {
     pub preference: f32,
     pub stress: f32,
     pub fascination: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelationshipGraphSnapshot {
+    pub nodes: Vec<RelationshipNode>,
+    pub edges: Vec<RelationshipEdge>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelationshipNode {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelationshipEdge {
+    pub id: String,
+    pub kind: String,
+    pub source: String,
+    pub target: String,
+    pub affinity: Option<f32>,
+    pub attachment: Option<f32>,
+    pub trust: Option<f32>,
+    pub safety: Option<f32>,
+    pub tension: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRelationshipEdge {
+    source: String,
+    target: String,
+    #[serde(default)]
+    affinity: Option<f32>,
+    #[serde(default)]
+    attachment: Option<f32>,
+    #[serde(default)]
+    trust: Option<f32>,
+    #[serde(default)]
+    safety: Option<f32>,
+    #[serde(default)]
+    tension: Option<f32>,
 }
 
 const MAX_DELTA: f32 = 0.30;
@@ -317,6 +360,122 @@ impl CognitiveGraph {
         };
         
         Ok((attitudes, illusion))
+    }
+
+    pub async fn snapshot_relationship_graph(&self) -> Result<RelationshipGraphSnapshot> {
+        let query = r#"
+            SELECT
+                string::concat("", `in`) AS source,
+                string::concat("", `out`) AS target,
+                affinity,
+                attachment,
+                trust,
+                safety,
+                tension
+            FROM attitudes_towards;
+            SELECT
+                string::concat("", `in`) AS source,
+                string::concat("", `out`) AS target,
+                affinity,
+                attachment,
+                trust,
+                safety,
+                tension
+            FROM illusion_of;
+            SELECT
+                string::concat("", `in`) AS source,
+                string::concat("", `out`) AS target,
+                tension
+            FROM interacts_with;
+        "#;
+
+        let mut response = self.db.query(query).await?;
+        let social_edges = take_relationship_edges(&mut response, 0);
+        let illusion_edges = take_relationship_edges(&mut response, 1);
+        let dynamic_edges = take_relationship_edges(&mut response, 2);
+
+        let mut edges = Vec::new();
+        let mut nodes = HashMap::new();
+
+        for (kind, raw_edges) in [
+            ("social", social_edges),
+            ("illusion", illusion_edges),
+            ("observed_dynamic", dynamic_edges),
+        ] {
+            for raw in raw_edges {
+                let source = normalize_record_id(&raw.source);
+                let target = normalize_record_id(&raw.target);
+
+                nodes
+                    .entry(source.clone())
+                    .or_insert_with(|| build_relationship_node(&source));
+                nodes
+                    .entry(target.clone())
+                    .or_insert_with(|| build_relationship_node(&target));
+
+                edges.push(RelationshipEdge {
+                    id: format!("{}:{}->{}", kind, source, target),
+                    kind: kind.to_string(),
+                    source,
+                    target,
+                    affinity: raw.affinity,
+                    attachment: raw.attachment,
+                    trust: raw.trust,
+                    safety: raw.safety,
+                    tension: raw.tension,
+                });
+            }
+        }
+
+        if !nodes.contains_key("person:ryuuko") {
+            nodes.insert(
+                "person:ryuuko".to_string(),
+                build_relationship_node("person:ryuuko"),
+            );
+        }
+
+        let mut node_list: Vec<RelationshipNode> = nodes.into_values().collect();
+        node_list.sort_by(|a, b| a.id.cmp(&b.id));
+        edges.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(RelationshipGraphSnapshot {
+            nodes: node_list,
+            edges,
+        })
+    }
+}
+
+fn normalize_record_id(value: &str) -> String {
+    value.trim_matches('"').to_string()
+}
+
+fn take_relationship_edges(
+    response: &mut surrealdb::IndexedResults,
+    idx: usize,
+) -> Vec<RawRelationshipEdge> {
+    let raw_values: Vec<serde_json::Value> = response.take(idx).unwrap_or_default();
+    raw_values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<RawRelationshipEdge>(value).ok())
+        .collect()
+}
+
+fn build_relationship_node(id: &str) -> RelationshipNode {
+    let label = id.rsplit(':').next().unwrap_or(id).to_string();
+    let kind = if id == "person:ryuuko" {
+        "agent"
+    } else if id.starts_with("person:") {
+        "person"
+    } else if id.starts_with("entity:") {
+        "entity"
+    } else {
+        "unknown"
+    };
+
+    RelationshipNode {
+        id: id.to_string(),
+        label,
+        kind: kind.to_string(),
     }
 }
 

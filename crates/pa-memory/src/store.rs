@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use tracing::{debug, info};
 
 use crate::types::MemoryMessage;
@@ -27,6 +27,16 @@ impl MemoryStore {
         let store = Self { conn };
         store.init_tables()?;
         Ok(store)
+    }
+
+    pub fn open_read_only(path: &str) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("Failed to open memory database read-only: {}", path))?;
+
+        Ok(Self { conn })
     }
 
     fn init_tables(&self) -> Result<()> {

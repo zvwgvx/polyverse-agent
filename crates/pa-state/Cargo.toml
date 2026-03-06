@@ -1,0 +1,12 @@
+[package]
+name = "pa-state"
+description = "State schema and local state store for cockpit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
