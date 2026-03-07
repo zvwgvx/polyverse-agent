@@ -256,7 +256,13 @@ async fn main() -> Result<()> {
 
     info!("Initializing Episodic Memory and Embedding Engine...");
     let episodic = Arc::new(EpisodicStore::open(&lancedb_path, "episodic_memory").await?);
-    let embedder = Arc::new(MemoryEmbedder::new()?);
+    let embedder_pool_size = std::env::var("EMBEDDER_POOL_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 3))
+        .unwrap_or(1);
+    let embedder = Arc::new(MemoryEmbedder::new_with_pool_size(embedder_pool_size)?);
+    info!(pool_size = embedder.pool_size(), "Embedding pool initialized");
     let compressor_opt = SemanticCompressor::new().ok().map(Arc::new);
 
     info!("Initializing SurrealDB Cognitive Graph...");
