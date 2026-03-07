@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
+use pa_core::get_agent_profile;
 use pa_core::event::Event;
 use pa_core::prompt_registry::{get_prompt_or, render_prompt_or};
 use pa_core::worker::{Worker, WorkerContext, WorkerStatus};
@@ -131,7 +132,9 @@ impl AffectEvaluatorWorker {
             .build()
             .unwrap_or_default();
 
-        let persona_prompt = get_prompt_or("persona.base", "You are Ryuuko.");
+        let profile = get_agent_profile();
+        let fallback_persona = format!("You are {}.", profile.display_name);
+        let persona_prompt = get_prompt_or("persona.base", fallback_persona.as_str());
 
         Self {
             config,
@@ -197,6 +200,7 @@ impl Worker for AffectEvaluatorWorker {
 	                            };
                             
                             let target_user = user_id.clone();
+                            let message_id = raw.message_id.clone();
                             let current_msg = raw.content.clone();
                             let c = config.clone();
                             let h = http_client.clone();
@@ -204,11 +208,11 @@ impl Worker for AffectEvaluatorWorker {
                             let pp = persona_prompt.clone();
                             let g = graph.clone();
                             
-	                            let e = self.episodic.clone();
-	                            let em = self.embedder.clone();
-	                            
+		                            let e = self.episodic.clone();
+		                            let em = self.embedder.clone();
+		                            
 	                            active_tasks.spawn(async move {
-	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, history, &current_msg, e, em).await;
+	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, &message_id, history, &current_msg, e, em).await;
 	                            });
 	                        }
                         Ok(_) => {}
@@ -244,12 +248,14 @@ impl AffectEvaluatorWorker {
         persona: &str,
         graph: &CognitiveGraph,
         user_id: &str,
+        message_id: &str,
         history: Vec<(String, String, String)>,
         current_msg: &str,
         episodic: Option<Arc<EpisodicStore>>,
         embedder: Option<Arc<MemoryEmbedder>>,
     ) {
         let cognitive_context = crate::context::build_shared_cognitive_context(
+            message_id,
             &history,
             episodic.as_ref(),
 	        embedder.as_ref(),
@@ -259,10 +265,15 @@ impl AffectEvaluatorWorker {
 	    ).await;
 	        
 	    let mut formatted_log = String::new();
-	    for (role, user, content) in history.iter().rev().take(4).rev() {
-	        let name = if role == "assistant" { "Ryuuko" } else { user.as_str() };
-	        formatted_log.push_str(&format!("{}: {}\n", name, content));
-	    }
+        let profile = get_agent_profile();
+        for (role, user, content) in history.iter().rev().take(4).rev() {
+            let name = if role == "assistant" {
+                profile.display_name.as_str()
+            } else {
+                user.as_str()
+            };
+            formatted_log.push_str(&format!("{}: {}\n", name, content));
+        }
 	    formatted_log.push_str(&format!("{}: {}\n", user_id, current_msg));
 	        
         let mut composite_system_prompt = render_prompt_or(

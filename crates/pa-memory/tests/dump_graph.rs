@@ -2,9 +2,17 @@ use anyhow::Result;
 
 #[tokio::test]
 async fn test_full_roundtrip() -> Result<()> {
-    let graph = pa_memory::graph::CognitiveGraph::new("data/ryuuko_graph").await?;
-    
-    graph.db.query("DELETE attitudes_towards:ryuuko_roundtrip; DELETE illusion_of:roundtrip_ryuuko;").await?;
+    let graph = pa_memory::graph::CognitiveGraph::new("memory").await?;
+    let forward_edge = format!("{}_roundtrip", graph.agent_id());
+    let reverse_edge = format!("roundtrip_{}", graph.agent_id());
+
+    graph
+        .db
+        .query(format!(
+            "DELETE attitudes_towards:`{}`; DELETE illusion_of:`{}`;",
+            forward_edge, reverse_edge
+        ))
+        .await?;
     
     println!("=== First write ===");
     let delta1 = pa_memory::graph::SocialDelta {
@@ -40,7 +48,10 @@ async fn test_full_roundtrip() -> Result<()> {
     
     println!("\n✅ All assertions passed! Delta accumulation works!");
     
-    graph.db.query("DELETE attitudes_towards:ryuuko_roundtrip;").await?;
+    graph
+        .db
+        .query(format!("DELETE attitudes_towards:`{}`;", forward_edge))
+        .await?;
     
     Ok(())
 }

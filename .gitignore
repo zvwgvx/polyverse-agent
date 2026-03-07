@@ -28,9 +28,12 @@ Icon
 .cache/
 .npm/
 .fastembed_cache
-apps/**/node_modules/
+node_modules/
 apps/**/.next/
 
 # Prompt secrets (custom runtime prompts)
 prompts/**/*.txt
 !prompts/**/*.txt.sample
+
+# Private agent profile
+config/agent_profile.toml

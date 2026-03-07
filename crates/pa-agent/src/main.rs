@@ -2,6 +2,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::Result;
+use pa_core::get_agent_profile;
 use serde::Deserialize;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -177,6 +178,7 @@ fn load_config() -> Result<Config> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = load_config()?;
+    let agent_profile = get_agent_profile().clone();
 
     let default_filter = format!("{},ort=warn,fastembed=warn,lance=warn", config.agent.log_level);
     let filter = EnvFilter::try_from_default_env()
@@ -189,6 +191,8 @@ async fn main() -> Result<()> {
 
     info!(
         name = %config.agent.name,
+        agent_id = %agent_profile.agent_id,
+        display_name = %agent_profile.display_name,
         "=== Polyverse Agent Starting ==="
     );
 
@@ -242,8 +246,7 @@ async fn main() -> Result<()> {
     use std::sync::Arc;
     use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder, compressor::SemanticCompressor};
 
-    let lancedb_path = std::env::var("LANCE_DB_PATH")
-        .unwrap_or_else(|_| "data/ryuuko_lancedb".to_string());
+    let lancedb_path = agent_profile.episodic_db_path.clone();
     
     if let Some(parent) = std::path::Path::new(&lancedb_path).parent() {
         if !parent.exists() {
@@ -257,14 +260,13 @@ async fn main() -> Result<()> {
     let compressor_opt = SemanticCompressor::new().ok().map(Arc::new);
 
     info!("Initializing SurrealDB Cognitive Graph...");
-    let cognitive_graph = pa_memory::graph::CognitiveGraph::new("data/ryuuko_graph").await?;
+    let cognitive_graph = pa_memory::graph::CognitiveGraph::new(&agent_profile.graph_db_path).await?;
 
     if compressor_opt.is_none() {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
     }
 
-    let memory_db_path =
-        std::env::var("MEMORY_DB_PATH").unwrap_or_else(|_| "data/ryuuko_memory.db".to_string());
+    let memory_db_path = agent_profile.memory_db_path.clone();
 
     let mut memory_worker = MemoryWorker::new(&memory_db_path)
         .with_episodic(Arc::clone(&episodic))

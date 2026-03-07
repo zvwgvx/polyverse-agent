@@ -1,0 +1,15 @@
+# Private agent profile.
+# Copy this file to config/agent_profile.toml and customize it locally.
+
+agent_id = "agent"
+display_name = "Agent"
+graph_self_id = "person:agent"
+
+memory_db_path = "data/agent_memory.db"
+graph_db_path = "data/agent_graph"
+episodic_db_path = "data/agent_lancedb"
+
+agent_timezone_label = "GMT+8"
+agent_timezone_offset_hours = 8
+user_timezone_label = "GMT+7"
+user_timezone_offset_hours = 7

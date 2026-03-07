@@ -1,18 +1,98 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+
+use pa_core::get_agent_profile;
 use pa_core::prompt_registry::render_prompt_or;
 use pa_memory::{
     episodic::EpisodicStore,
     embedder::MemoryEmbedder,
     graph::CognitiveGraph,
 };
+use tokio::sync::Mutex;
 
+#[derive(Clone)]
 pub struct SharedCognitiveContext {
     pub memory_text: Option<String>,
     pub social_text: String,
     pub time_and_history_text: String,
 }
 
+#[derive(Clone)]
+struct CachedSharedContext {
+    cached_at: Instant,
+    value: SharedCognitiveContext,
+}
+
+#[derive(Clone)]
+struct CachedChunkCount {
+    cached_at: Instant,
+    value: usize,
+}
+
+static SHARED_CONTEXT_CACHE: OnceLock<
+    Mutex<HashMap<String, Arc<Mutex<Option<CachedSharedContext>>>>>,
+> = OnceLock::new();
+static USER_CHUNK_COUNT_CACHE: OnceLock<Mutex<HashMap<String, CachedChunkCount>>> = OnceLock::new();
+
+const SHARED_CONTEXT_TTL: Duration = Duration::from_secs(30);
+const USER_CHUNK_COUNT_TTL: Duration = Duration::from_secs(300);
+const MAX_SHARED_CONTEXT_CACHE: usize = 2_048;
+const MAX_USER_CHUNK_COUNT_CACHE: usize = 1_024;
+
+fn shared_context_cache() -> &'static Mutex<HashMap<String, Arc<Mutex<Option<CachedSharedContext>>>>> {
+    SHARED_CONTEXT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn user_chunk_count_cache() -> &'static Mutex<HashMap<String, CachedChunkCount>> {
+    USER_CHUNK_COUNT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 pub async fn build_shared_cognitive_context(
+    message_id: &str,
+    history: &[(String, String, String)],
+    episodic: Option<&Arc<EpisodicStore>>,
+    embedder: Option<&Arc<MemoryEmbedder>>,
+    graph: &CognitiveGraph,
+    current_username: &str,
+    new_message: &str,
+) -> SharedCognitiveContext {
+    let slot = {
+        let mut cache = shared_context_cache().lock().await;
+        if cache.len() > MAX_SHARED_CONTEXT_CACHE {
+            cache.clear();
+        }
+        cache.entry(message_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone()
+    };
+
+    let mut cached = slot.lock().await;
+    if let Some(entry) = cached.as_ref() {
+        if entry.cached_at.elapsed() < SHARED_CONTEXT_TTL {
+            return entry.value.clone();
+        }
+    }
+
+    let computed = build_shared_cognitive_context_uncached(
+        history,
+        episodic,
+        embedder,
+        graph,
+        current_username,
+        new_message,
+    )
+    .await;
+
+    *cached = Some(CachedSharedContext {
+        cached_at: Instant::now(),
+        value: computed.clone(),
+    });
+
+    computed
+}
+
+async fn build_shared_cognitive_context_uncached(
     history: &[(String, String, String)],
     episodic: Option<&Arc<EpisodicStore>>,
     embedder: Option<&Arc<MemoryEmbedder>>,
@@ -59,11 +139,7 @@ pub async fn build_shared_cognitive_context(
         }
     }
 
-    let lancedb_count = if let Some(ep) = episodic {
-        ep.count_user_chunks(current_username).await.unwrap_or(0_usize)
-    } else {
-        0_usize
-    };
+    let lancedb_count = cached_user_chunk_count(episodic, current_username).await;
     let memory_hint = (lancedb_count as f32 / 200.0).min(0.15);
 
     let social_text;
@@ -111,14 +187,22 @@ pub async fn build_shared_cognitive_context(
         );
     }
 
+    let profile = get_agent_profile();
     let now = chrono::Utc::now();
-    let sg_time = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
-    let vn_time = now.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap());
+    let agent_offset = chrono::FixedOffset::east_opt(profile.agent_timezone_offset_hours * 3600)
+        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("valid utc offset"));
+    let user_offset = chrono::FixedOffset::east_opt(profile.user_timezone_offset_hours * 3600)
+        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("valid utc offset"));
+    let agent_time = now.with_timezone(&agent_offset);
+    let user_time = now.with_timezone(&user_offset);
     let mut time_and_history_text = format!(
-        "[NOW]: UTC: {} | Ryuuko(GMT+8): {} | User(GMT+7): {}\n",
+        "[NOW]: UTC: {} | {}({}): {} | User({}): {}\n",
         now.format("%d/%m/%Y %H:%M:%S"),
-        sg_time.format("%d/%m/%Y %H:%M:%S"),
-        vn_time.format("%d/%m/%Y %H:%M:%S")
+        profile.display_name,
+        profile.agent_timezone_label,
+        agent_time.format("%d/%m/%Y %H:%M:%S"),
+        profile.user_timezone_label,
+        user_time.format("%d/%m/%Y %H:%M:%S")
     );
 
     if history.is_empty() {
@@ -160,4 +244,38 @@ pub async fn build_shared_cognitive_context(
         social_text,
         time_and_history_text,
     }
+}
+
+async fn cached_user_chunk_count(
+    episodic: Option<&Arc<EpisodicStore>>,
+    current_username: &str,
+) -> usize {
+    let Some(ep) = episodic else {
+        return 0;
+    };
+
+    {
+        let cache = user_chunk_count_cache().lock().await;
+        if let Some(entry) = cache.get(current_username) {
+            if entry.cached_at.elapsed() < USER_CHUNK_COUNT_TTL {
+                return entry.value;
+            }
+        }
+    }
+
+    let count = ep.count_user_chunks(current_username).await.unwrap_or(0_usize);
+
+    let mut cache = user_chunk_count_cache().lock().await;
+    if cache.len() > MAX_USER_CHUNK_COUNT_CACHE {
+        cache.clear();
+    }
+    cache.insert(
+        current_username.to_string(),
+        CachedChunkCount {
+            cached_at: Instant::now(),
+            value: count,
+        },
+    );
+
+    count
 }

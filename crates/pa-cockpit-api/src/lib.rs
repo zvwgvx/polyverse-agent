@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Component, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -13,6 +13,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use pa_core::agent_profile::get_agent_profile;
 use pa_core::event::{Event, SystemEvent};
 use pa_core::worker::{Worker, WorkerContext, WorkerStatus};
 use pa_memory::episodic::EpisodicStore;
@@ -62,7 +63,15 @@ pub struct WorkerStateView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AgentIdentityView {
+    pub agent_id: String,
+    pub display_name: String,
+    pub graph_self_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CockpitOverview {
+    pub identity: AgentIdentityView,
     pub started_at: DateTime<Utc>,
     pub uptime_seconds: u64,
     pub counters: CockpitCounter,
@@ -115,7 +124,7 @@ impl CockpitMetrics {
         }
     }
 
-    fn overview(&self) -> CockpitOverview {
+    fn overview(&self, identity: &AgentIdentityView) -> CockpitOverview {
         let uptime = Utc::now() - self.started_at;
         let workers = self
             .worker_status
@@ -127,6 +136,7 @@ impl CockpitMetrics {
             .collect();
 
         CockpitOverview {
+            identity: identity.clone(),
             started_at: self.started_at,
             uptime_seconds: uptime.num_seconds().max(0) as u64,
             counters: self.counters.clone(),
@@ -173,13 +183,17 @@ struct PromptRegistryFile {
 
 #[derive(Clone)]
 struct AppState {
+    identity: AgentIdentityView,
     metrics: Arc<RwLock<CockpitMetrics>>,
     state_store: StateStore,
     prompts: Arc<PromptCatalog>,
     memory_db_path: Option<String>,
+    memory_reader: Option<Arc<std::sync::Mutex<Option<MemoryStore>>>>,
     short_term: Option<Arc<Mutex<ShortTermMemory>>>,
     episodic: Option<Arc<EpisodicStore>>,
     graph: Option<CognitiveGraph>,
+    system_cache: Arc<RwLock<Option<CachedSystemSnapshot>>>,
+    relationship_cache: Arc<RwLock<Option<CachedRelationshipSnapshot>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,9 +206,12 @@ pub struct CockpitWorker {
     state_store: StateStore,
     metrics: Arc<RwLock<CockpitMetrics>>,
     memory_db_path: Option<String>,
+    memory_reader: Option<Arc<std::sync::Mutex<Option<MemoryStore>>>>,
     short_term: Option<Arc<Mutex<ShortTermMemory>>>,
     episodic: Option<Arc<EpisodicStore>>,
     graph: Option<CognitiveGraph>,
+    system_cache: Arc<RwLock<Option<CachedSystemSnapshot>>>,
+    relationship_cache: Arc<RwLock<Option<CachedRelationshipSnapshot>>>,
     status: WorkerStatus,
 }
 
@@ -268,6 +285,21 @@ pub struct SystemSnapshot {
     pub gpus: Vec<GpuView>,
 }
 
+#[derive(Clone)]
+struct CachedSystemSnapshot {
+    cached_at: Instant,
+    snapshot: SystemSnapshot,
+}
+
+#[derive(Clone)]
+struct CachedRelationshipSnapshot {
+    cached_at: Instant,
+    snapshot: RelationshipGraphSnapshot,
+}
+
+const SYSTEM_CACHE_TTL: Duration = Duration::from_millis(1500);
+const RELATIONSHIP_CACHE_TTL: Duration = Duration::from_millis(1200);
+
 impl CockpitWorker {
     pub fn new(config: CockpitApiConfig, state_store: StateStore) -> Self {
         Self {
@@ -275,15 +307,19 @@ impl CockpitWorker {
             config,
             state_store,
             memory_db_path: None,
+            memory_reader: None,
             short_term: None,
             episodic: None,
             graph: None,
+            system_cache: Arc::new(RwLock::new(None)),
+            relationship_cache: Arc::new(RwLock::new(None)),
             status: WorkerStatus::NotStarted,
         }
     }
 
     pub fn with_memory_db_path(mut self, path: impl Into<String>) -> Self {
         self.memory_db_path = Some(path.into());
+        self.memory_reader = Some(Arc::new(std::sync::Mutex::new(None)));
         self
     }
 
@@ -397,14 +433,23 @@ impl Worker for CockpitWorker {
             .with_context(|| format!("invalid COCKPIT_BIND address: {}", self.config.bind_addr))?;
 
         let prompts = Arc::new(load_prompt_catalog()?);
+        let profile = get_agent_profile();
         let app_state = AppState {
+            identity: AgentIdentityView {
+                agent_id: profile.agent_id.clone(),
+                display_name: profile.display_name.clone(),
+                graph_self_id: profile.graph_self_id.clone(),
+            },
             metrics: Arc::clone(&self.metrics),
             state_store: self.state_store.clone(),
             prompts,
             memory_db_path: self.memory_db_path.clone(),
+            memory_reader: self.memory_reader.clone(),
             short_term: self.short_term.clone(),
             episodic: self.episodic.clone(),
             graph: self.graph.clone(),
+            system_cache: Arc::clone(&self.system_cache),
+            relationship_cache: Arc::clone(&self.relationship_cache),
         };
 
         let cors = CorsLayer::new()
@@ -443,7 +488,6 @@ impl Worker for CockpitWorker {
                 warn!(error = %e, "cockpit API server exited with error");
             }
         });
-
         info!(bind = %bind_addr, "Cockpit API started");
         self.status = WorkerStatus::Healthy;
 
@@ -481,7 +525,7 @@ impl Worker for CockpitWorker {
 
 async fn get_overview(State(state): State<AppState>) -> impl IntoResponse {
     let metrics = state.metrics.read().await;
-    Json(metrics.overview())
+    Json(metrics.overview(&state.identity))
 }
 
 async fn get_events(
@@ -548,6 +592,7 @@ async fn get_prompt_document(
             format!("failed to read prompt file {}: {}", path.display(), err),
         )
     })?;
+    let _ = pa_core::prompt_registry::set_prompt_content(&query.id, content.clone());
 
     let rel_path = state
         .prompts
@@ -580,6 +625,12 @@ async fn post_prompt_update(
             format!("failed to write prompt file {}: {}", path.display(), err),
         )
     })?;
+    if let Err(err) = pa_core::prompt_registry::set_prompt_content(&req.id, req.content.clone()) {
+        return Err((
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to refresh prompt cache for {}: {}", req.id, err),
+        ));
+    }
 
     let rel_path = state
         .prompts
@@ -603,10 +654,37 @@ async fn get_memory(
 
     let mut overview = MemoryOverview::default();
 
-    if let Some(path) = &state.memory_db_path {
-        if let Ok(store) = MemoryStore::open_read_only(path) {
-            overview.persisted_message_count = store.message_count().unwrap_or(0);
-            overview.persisted_recent_messages = store.get_recent_all(limit).unwrap_or_default();
+    if let (Some(reader), Some(path)) = (&state.memory_reader, &state.memory_db_path) {
+        let reader = Arc::clone(reader);
+        let path = path.clone();
+        if let Ok(Ok(Some((count, messages)))) = tokio::task::spawn_blocking(move || {
+            let mut guard = match reader.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Ok(None),
+            };
+
+            if guard.is_none() {
+                match MemoryStore::open_read_only(&path) {
+                    Ok(store) => {
+                        *guard = Some(store);
+                    }
+                    Err(_) => return Ok(None),
+                }
+            }
+
+            let store = match guard.as_ref() {
+                Some(store) => store,
+                None => return Ok(None),
+            };
+
+            let count = store.message_count().unwrap_or(0);
+            let recent = store.get_recent_all(limit).unwrap_or_default();
+            Ok::<Option<(i64, Vec<MemoryMessage>)>, ()>(Some((count, recent)))
+        })
+        .await
+        {
+            overview.persisted_message_count = count;
+            overview.persisted_recent_messages = messages;
         }
     }
 
@@ -650,21 +728,58 @@ async fn get_episodic(
 }
 
 async fn get_relationships(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(cached) = state
+        .relationship_cache
+        .read()
+        .await
+        .as_ref()
+        .filter(|cached| cached.cached_at.elapsed() < RELATIONSHIP_CACHE_TTL)
+        .cloned()
+    {
+        return Json(cached.snapshot);
+    }
+
     if let Some(graph) = &state.graph {
         match graph.snapshot_relationship_graph().await {
-            Ok(snapshot) => return Json(snapshot),
+            Ok(snapshot) => {
+                let mut cache = state.relationship_cache.write().await;
+                *cache = Some(CachedRelationshipSnapshot {
+                    cached_at: Instant::now(),
+                    snapshot: snapshot.clone(),
+                });
+                return Json(snapshot);
+            }
             Err(err) => warn!(error = %err, "failed to build relationship graph snapshot"),
         }
     }
 
     Json(RelationshipGraphSnapshot {
+        self_node_id: state.identity.graph_self_id.clone(),
+        self_display_name: state.identity.display_name.clone(),
         nodes: Vec::new(),
         edges: Vec::new(),
     })
 }
 
-async fn get_system() -> impl IntoResponse {
-    Json(collect_system_snapshot().await)
+async fn get_system(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(cached) = state
+        .system_cache
+        .read()
+        .await
+        .as_ref()
+        .filter(|cached| cached.cached_at.elapsed() < SYSTEM_CACHE_TTL)
+        .cloned()
+    {
+        return Json(cached.snapshot);
+    }
+
+    let snapshot = collect_system_snapshot().await;
+    let mut cache = state.system_cache.write().await;
+    *cache = Some(CachedSystemSnapshot {
+        cached_at: Instant::now(),
+        snapshot: snapshot.clone(),
+    });
+    Json(snapshot)
 }
 
 fn truncate(input: &str, max: usize) -> String {

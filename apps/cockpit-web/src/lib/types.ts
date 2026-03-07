@@ -1,3 +1,9 @@
+export type AgentIdentityView = {
+  agent_id: string;
+  display_name: string;
+  graph_self_id: string;
+};
+
 export type CockpitCounter = {
   raw_events: number;
   mention_events: number;
@@ -14,6 +20,7 @@ export type WorkerStateView = {
 };
 
 export type CockpitOverview = {
+  identity: AgentIdentityView;
   started_at: string;
   uptime_seconds: number;
   counters: CockpitCounter;
@@ -142,6 +149,8 @@ export type RelationshipEdge = {
 };
 
 export type RelationshipGraphSnapshot = {
+  self_node_id: string;
+  self_display_name: string;
   nodes: RelationshipNode[];
   edges: RelationshipEdge[];
 };

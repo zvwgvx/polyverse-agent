@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -10,6 +10,7 @@ const REGISTRY_RELATIVE_PATH: &str = "config/prompt_registry.json";
 pub struct PromptRegistry {
     root_dir: PathBuf,
     prompts: HashMap<String, String>,
+    cache: RwLock<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,10 +41,17 @@ impl PromptRegistry {
         Ok(Self {
             root_dir,
             prompts: parsed.prompts,
+            cache: RwLock::new(HashMap::new()),
         })
     }
 
     fn load_prompt(&self, id: &str) -> Result<String> {
+        if let Ok(cache) = self.cache.read() {
+            if let Some(content) = cache.get(id) {
+                return Ok(content.clone());
+            }
+        }
+
         let rel_path = self
             .prompts
             .get(id)
@@ -53,7 +61,24 @@ impl PromptRegistry {
         let content = std::fs::read_to_string(&prompt_path)
             .with_context(|| format!("failed to read prompt file: {}", prompt_path.display()))?;
 
+        if let Ok(mut cache) = self.cache.write() {
+            cache.insert(id.to_string(), content.clone());
+        }
+
         Ok(content)
+    }
+
+    fn set_prompt(&self, id: &str, content: String) -> Result<()> {
+        if !self.prompts.contains_key(id) {
+            return Err(anyhow::anyhow!("prompt id not found in registry: {}", id));
+        }
+
+        let mut cache = self
+            .cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("prompt registry cache poisoned"))?;
+        cache.insert(id.to_string(), content);
+        Ok(())
     }
 }
 
@@ -74,6 +99,11 @@ pub fn render_prompt(id: &str, vars: &[(&str, &str)]) -> Result<String> {
 pub fn render_prompt_or(id: &str, vars: &[(&str, &str)], fallback: &str) -> String {
     let content = get_prompt(id).unwrap_or_else(|_| fallback.to_string());
     apply_vars(&content, vars)
+}
+
+pub fn set_prompt_content(id: &str, content: String) -> Result<()> {
+    let registry = registry()?;
+    registry.set_prompt(id, content)
 }
 
 fn registry() -> Result<&'static PromptRegistry> {

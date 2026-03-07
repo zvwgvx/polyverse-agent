@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::StreamExt;
+use pa_core::get_agent_profile;
 use pa_core::event::{
     Event, ResponseEvent, ResponseSource,
 };
@@ -146,13 +147,18 @@ impl DialogueEngineWorker {
         match pa_core::prompt_registry::get_prompt("persona.base") {
             Ok(s) => s,
             Err(e) => {
+                let profile = get_agent_profile();
+                let fallback = format!(
+                    "You are {}, an AI chatbot.\nReply briefly and naturally.\n",
+                    profile.display_name
+                );
                 tracing::warn!(
                     "Failed to load persona.base from prompt registry, using fallback prompt. Error: {}",
                     e
                 );
                 pa_core::prompt_registry::get_prompt_or(
                     "dialogue_engine.fallback",
-                    "You are Ryuuko, an AI chatbot.\nReply briefly and naturally.\n",
+                    fallback.as_str(),
                 )
             }
         }
@@ -366,6 +372,7 @@ impl DialogueEngineWorker {
         ];
 
         let cognitive_context = crate::context::build_shared_cognitive_context(
+            &raw_event.message_id,
             &history,
             Some(&episodic),
             Some(&embedder),

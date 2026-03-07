@@ -46,6 +46,17 @@ type MetricChartProps = {
   ceiling?: number;
 };
 
+type LoadLiveOptions = {
+  overview?: boolean;
+  states?: boolean;
+  events?: boolean;
+  prompts?: boolean;
+  history?: boolean;
+  memory?: boolean;
+  relationships?: boolean;
+  system?: boolean;
+};
+
 const NAV_ITEMS: Array<{ id: ViewId; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "metrics", label: "Metrics" },
@@ -138,7 +149,7 @@ function relationshipStrength(edge: RelationshipEdge): number {
 }
 
 function renderSpeaker(message: MemoryMessage): string {
-  return message.is_bot_response ? "Ryuuko" : message.username;
+  return message.username || "assistant";
 }
 
 function average(values: number[]): number {
@@ -287,6 +298,10 @@ function buildAreaPath(points: Array<{ x: number; y: number }>, height: number):
   const first = points[0];
   const last = points[points.length - 1];
   return `${line} L ${last.x.toFixed(2)} ${height} L ${first.x.toFixed(2)} ${height} Z`;
+}
+
+function isPageVisible(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
 function curveDirection(id: string): number {
@@ -475,8 +490,8 @@ export function Dashboard() {
       ids.add(selectedPair.nodeB);
     }
 
-    if (relationshipNodeMap.has("person:ryuuko")) {
-      ids.add("person:ryuuko");
+    if (relationships?.self_node_id && relationshipNodeMap.has(relationships.self_node_id)) {
+      ids.add(relationships.self_node_id);
     }
 
     return (relationships?.nodes ?? []).filter((node) => ids.has(node.id));
@@ -506,7 +521,8 @@ export function Dashboard() {
         });
       });
     } else {
-      const anchor = nodes.find((node) => node.id === "person:ryuuko") ?? nodes[0];
+      const anchor =
+        nodes.find((node) => node.id === relationships?.self_node_id) ?? nodes[0];
       if (anchor) {
         positions.set(anchor.id, center);
       }
@@ -523,7 +539,7 @@ export function Dashboard() {
     }
 
     return { width, height, center, positions };
-  }, [graphLayout, selectedPair, visibleNodes]);
+  }, [graphLayout, relationships?.self_node_id, selectedPair, visibleNodes]);
 
   const primaryDisk = useMemo(() => {
     const disks = system?.disks ?? [];
@@ -561,47 +577,93 @@ export function Dashboard() {
     [promptDocument, promptDraft]
   );
 
-  async function loadLive() {
+  async function loadLive(options: LoadLiveOptions) {
     setLoadState((prev) => (prev === "idle" ? "loading" : prev));
     setError("");
 
     try {
-      const [overviewData, stateData, eventData, promptData, historyData, memoryData, relationshipData, systemData] =
-        await Promise.all([
-          fetchJson<CockpitOverview>("/api/cockpit/overview"),
-          fetchJson<StateRow[]>("/api/cockpit/states"),
-          fetchJson<CockpitEventView[]>("/api/cockpit/events?limit=80"),
-          fetchJson<PromptEntry[]>("/api/cockpit/prompts"),
-          fetchJson<StateDeltaLog[]>("/api/cockpit/states/history?limit=120"),
-          fetchJson<MemoryOverview>("/api/cockpit/memory?limit=36"),
-          fetchJson<RelationshipGraphSnapshot>("/api/cockpit/relationships"),
-          fetchJson<SystemSnapshot>("/api/cockpit/system")
-        ]);
+      const tasks: Promise<void>[] = [];
 
-      setOverview(overviewData);
-      setStates(stateData);
-      setEvents(eventData);
-      setPrompts(promptData);
-      setHistory(historyData);
-      setMemory(memoryData);
-      setRelationships(relationshipData);
-      setSystem(systemData);
+      if (options.overview) {
+        tasks.push(
+          fetchJson<CockpitOverview>("/api/cockpit/overview").then((overviewData) => {
+            setOverview(overviewData);
+          })
+        );
+      }
+
+      if (options.states) {
+        tasks.push(
+          fetchJson<StateRow[]>("/api/cockpit/states").then((stateData) => {
+            setStates(stateData);
+            if (!patchDimension && stateData.length > 0) {
+              setPatchDimension(stateData[0].id);
+            }
+          })
+        );
+      }
+
+      if (options.events) {
+        tasks.push(
+          fetchJson<CockpitEventView[]>("/api/cockpit/events?limit=80").then((eventData) => {
+            setEvents(eventData);
+          })
+        );
+      }
+
+      if (options.prompts) {
+        tasks.push(
+          fetchJson<PromptEntry[]>("/api/cockpit/prompts").then((promptData) => {
+            setPrompts(promptData);
+            if (!selectedPromptId && promptData.length > 0) {
+              setSelectedPromptId(promptData[0].id);
+            }
+          })
+        );
+      }
+
+      if (options.history) {
+        tasks.push(
+          fetchJson<StateDeltaLog[]>("/api/cockpit/states/history?limit=120").then((historyData) => {
+            setHistory(historyData);
+          })
+        );
+      }
+
+      if (options.memory) {
+        tasks.push(
+          fetchJson<MemoryOverview>("/api/cockpit/memory?limit=36").then((memoryData) => {
+            setMemory(memoryData);
+          })
+        );
+      }
+
+      if (options.relationships) {
+        tasks.push(
+          fetchJson<RelationshipGraphSnapshot>("/api/cockpit/relationships").then((relationshipData) => {
+            setRelationships(relationshipData);
+          })
+        );
+      }
+
+      if (options.system) {
+        tasks.push(
+          fetchJson<SystemSnapshot>("/api/cockpit/system").then((systemData) => {
+            setSystem(systemData);
+            setSystemHistory((prev) => {
+              const last = prev.length > 0 ? prev[prev.length - 1] : null;
+              if (last?.collected_at === systemData.collected_at) {
+                return prev;
+              }
+              const next = [...prev, systemData];
+              return next.slice(-120);
+            });
+          })
+        );
+      }
+
+      await Promise.all(tasks);
       setLoadState("ready");
-      setSystemHistory((prev) => {
-        const last = prev.length > 0 ? prev[prev.length - 1] : null;
-        if (last?.collected_at === systemData.collected_at) {
-          return prev;
-        }
-        const next = [...prev, systemData];
-        return next.slice(-120);
-      });
-
-      if (!patchDimension && stateData.length > 0) {
-        setPatchDimension(stateData[0].id);
-      }
-      if (!selectedPromptId && promptData.length > 0) {
-        setSelectedPromptId(promptData[0].id);
-      }
     } catch (err) {
       setLoadState("error");
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -669,7 +731,7 @@ export function Dashboard() {
       setPromptDocument(saved);
       setPromptDraft(saved.content);
       setPromptStatus(`Saved ${saved.id}`);
-      await loadLive();
+      await loadLive({ overview: true, prompts: true });
     } catch (err) {
       setPromptStatus("");
       setError(err instanceof Error ? err.message : "Prompt save failed");
@@ -709,7 +771,7 @@ export function Dashboard() {
         throw new Error(text || "Patch failed");
       }
 
-      await loadLive();
+      await loadLive({ overview: true, states: true, history: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Patch failed");
     } finally {
@@ -717,26 +779,61 @@ export function Dashboard() {
     }
   }
 
+  async function refreshActiveView(view: ViewId = activeView) {
+    switch (view) {
+      case "overview":
+        await loadLive({ overview: true, events: true, states: true });
+        break;
+      case "metrics":
+        await loadLive({ overview: true, system: true });
+        break;
+      case "memory":
+        await loadLive({ overview: true, memory: true });
+        break;
+      case "episodic":
+        await loadLive({ overview: true });
+        await loadEpisodic();
+        break;
+      case "graph":
+        await loadLive({ overview: true, relationships: true });
+        break;
+      case "prompts":
+        await loadLive({ overview: true, prompts: true });
+        break;
+      case "state":
+        await loadLive({ overview: true, states: true, history: true });
+        break;
+    }
+  }
+
   useEffect(() => {
-    void loadLive();
-    void loadEpisodic();
-
-    const timer = setInterval(() => {
-      void loadLive();
-    }, 1000);
-
-    return () => clearInterval(timer);
+    void loadLive({
+      overview: true,
+      states: true,
+      events: true,
+      prompts: true,
+      history: true,
+      memory: true,
+      system: true
+    });
   }, []);
 
   useEffect(() => {
-    if (activeView !== "episodic") {
-      return;
-    }
+    void refreshActiveView(activeView);
 
-    void loadEpisodic();
+    const intervalMs =
+      activeView === "overview" || activeView === "metrics"
+        ? 1000
+        : activeView === "episodic" || activeView === "prompts"
+          ? 15000
+          : 2000;
+
     const timer = setInterval(() => {
-      void loadEpisodic();
-    }, 15000);
+      if (!isPageVisible()) {
+        return;
+      }
+      void refreshActiveView(activeView);
+    }, intervalMs);
 
     return () => clearInterval(timer);
   }, [activeView]);
@@ -768,8 +865,11 @@ export function Dashboard() {
         <aside className="sidebar">
           <section className="sidebar-panel sidebar-brand">
             <div className="panel-kicker">Built-in cockpit</div>
-            <h1>Polyverse Agent Console</h1>
-            <p>Operational surface for runtime, memory, graph, and state control.</p>
+            <h1>{overview?.identity.display_name ?? "Polyverse Agent Console"}</h1>
+            <p>
+              Operational surface for runtime, memory, graph, and state control.
+              {overview?.identity.agent_id ? ` Profile: ${overview.identity.agent_id}.` : ""}
+            </p>
           </section>
 
           <nav className="sidebar-panel sidebar-nav" aria-label="Cockpit sections">
@@ -816,11 +916,11 @@ export function Dashboard() {
                 <div className="panel-kicker">Live command deck</div>
                 <h2>{NAV_ITEMS.find((item) => item.id === activeView)?.label ?? "Overview"}</h2>
                 <p>
-                  Local operational surface for runtime health, live metrics, memory layers, relationship graph, and state tuning.
+                  {overview?.identity.display_name ?? "This agent"} local operational surface for runtime health, live metrics, memory layers, relationship graph, and state tuning.
                 </p>
               </div>
               <div className="hero-actions">
-                <button type="button" onClick={() => void loadLive()}>
+                <button type="button" onClick={() => void refreshActiveView()}>
                   Refresh live data
                 </button>
               </div>
@@ -841,9 +941,9 @@ export function Dashboard() {
               <div className="summary-foot">sample {system ? formatAgo(system.collected_at) : "-"}</div>
             </article>
             <article className="summary-card">
-              <div className="summary-label">SQL memory</div>
-              <div className="summary-value">{memory?.persisted_message_count ?? 0}</div>
-              <div className="summary-foot">persisted chat rows</div>
+              <div className="summary-label">Agent ID</div>
+              <div className="summary-value">{overview?.identity.agent_id ?? "-"}</div>
+              <div className="summary-foot">runtime profile</div>
             </article>
             <article className="summary-card">
               <div className="summary-label">Episodic chunks</div>
@@ -1211,7 +1311,9 @@ export function Dashboard() {
               <div className="panel-kicker">Cognitive graph</div>
               <h2>Relationship Graph</h2>
             </div>
-            <div className="graph-caption">Filter, focus, and inspect the live relationship surface.</div>
+              <div className="graph-caption">
+                Filter, focus, and inspect the live relationship surface around {relationships?.self_display_name ?? overview?.identity.display_name ?? "the agent"}.
+              </div>
           </div>
 
           <div className="graph-toolbar">

@@ -115,7 +115,7 @@ impl EpisodicStore {
         query_vector: &[f32],
         limit: usize,
         lambda: f32,
-    ) -> Result<Vec<MemoryEvent>> {
+    ) -> Result<Vec<EpisodicEntry>> {
         let mut stream = self.table
             .query()
             .nearest_to(query_vector)?
@@ -130,8 +130,6 @@ impl EpisodicStore {
             
             let id_col = batch.column_by_name("id").context("Missing id")?
                 .as_any().downcast_ref::<StringArray>().context("id not a string")?;
-            let vector_col = batch.column_by_name("vector").context("Missing vector")?
-                .as_any().downcast_ref::<arrow::array::FixedSizeListArray>().context("vector not a list")?;
             let content_col = batch.column_by_name("content").context("Missing content")?
                 .as_any().downcast_ref::<StringArray>().context("content not a string")?;
             let timestamp_col = batch.column_by_name("timestamp").context("Missing timestamp")?
@@ -143,8 +141,6 @@ impl EpisodicStore {
             let distance_col = batch.column_by_name("_distance").context("Missing _distance")?
                 .as_any().downcast_ref::<Float32Array>().context("_distance not f32")?;
 
-            let float_values = vector_col.values().as_any().downcast_ref::<Float32Array>().unwrap();
-
             for i in 0..batch.num_rows() {
                 let id = id_col.value(i).to_string();
                 let content = content_col.value(i).to_string();
@@ -153,11 +149,16 @@ impl EpisodicStore {
                 let metadata = metadata_col.value(i).to_string();
                 let distance = distance_col.value(i);
 
-                let start_idx = vector_col.value_offset(i) as usize;
-                let end_idx = start_idx + vector_col.value_length() as usize;
-                let vector = float_values.values()[start_idx..end_idx].to_vec();
-
-                candidates.push((MemoryEvent { id, vector, content, timestamp, importance, metadata }, distance));
+                candidates.push((
+                    EpisodicEntry {
+                        id,
+                        content,
+                        timestamp,
+                        importance,
+                        metadata,
+                    },
+                    distance,
+                ));
             }
         }
 

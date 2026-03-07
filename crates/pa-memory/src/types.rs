@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use pa_core::get_agent_profile;
 use pa_core::event::{Platform, RawEvent};
 use serde::{Deserialize, Serialize};
 
@@ -71,12 +72,13 @@ impl MemoryMessage {
         _reply_to: Option<String>,
         reply_to_user: Option<String>,
     ) -> Self {
+        let profile = get_agent_profile();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             platform,
             channel_id,
-            user_id: "ryuuko".to_string(),
-            username: "Ryuuko".to_string(),
+            user_id: profile.agent_id.clone(),
+            username: profile.display_name.clone(),
             content,
             is_mention: false,
             is_bot_response: true,
@@ -138,7 +140,7 @@ mod tests {
             message_id: "m1".to_string(),
             user_id: "u1".to_string(),
             username: "TestUser".to_string(),
-            content: "Hello Ryuuko!".to_string(),
+            content: "Hello Agent!".to_string(),
             is_mention: true,
             is_dm: false,
             timestamp: Utc::now(),
@@ -159,6 +161,7 @@ mod tests {
 
     #[test]
     fn test_bot_response() {
+        let profile = get_agent_profile();
         let msg = MemoryMessage::bot_response(
             Platform::Telegram,
             "chat123".to_string(),
@@ -167,6 +170,6 @@ mod tests {
             Some("zvwgvx".to_string()),
         );
         assert!(msg.is_bot_response);
-        assert_eq!(msg.username, "Ryuuko");
+        assert_eq!(msg.username, profile.display_name);
     }
 }

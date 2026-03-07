@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use pa_core::get_agent_profile;
 use serde::Serialize;
 use tracing::{debug, info};
 
@@ -179,12 +180,13 @@ impl ShortTermMemory {
         if messages.is_empty() {
             return None;
         }
+        let profile = get_agent_profile();
 
         let formatted: Vec<String> = messages
             .iter()
             .map(|msg| {
                 let name = if msg.is_bot_response {
-                    "Ryuuko"
+                    profile.display_name.as_str()
                 } else {
                     &msg.username
                 };
@@ -410,7 +412,7 @@ mod tests {
         let mut mem = ShortTermMemory::new();
 
         let msg1 = make_msg("ch1", "Alice", "hello", false);
-        let msg2 = make_msg("ch1", "Bob", "hey ryuuko", true);
+        let msg2 = make_msg("ch1", "Bob", "hey agent", true);
         let msg3 = make_msg("ch1", "Alice", "what's up", false);
 
         mem.push(msg1);
@@ -437,18 +439,19 @@ mod tests {
 
     #[test]
     fn test_format_context() {
+        let profile = get_agent_profile();
         let mut mem = ShortTermMemory::new();
 
         mem.push(make_msg("ch1", "Alice", "xin chào", false));
-        let mut bot_msg = make_msg("ch1", "Ryuuko", "chào nha", false);
+        let mut bot_msg = make_msg("ch1", &profile.display_name, "chào nha", false);
         bot_msg.is_bot_response = true;
-        bot_msg.username = "Ryuuko".to_string();
+        bot_msg.username = profile.display_name.clone();
         mem.push(bot_msg);
 
         let key = ConversationKey::new(Platform::Discord, "ch1".to_string());
         let formatted = mem.format_context(&key).unwrap();
         assert!(formatted.contains("Alice: xin chào"));
-        assert!(formatted.contains("Ryuuko: chào nha"));
+        assert!(formatted.contains(&format!("{}: chào nha", profile.display_name)));
     }
 
     #[test]

@@ -1,13 +1,17 @@
 use anyhow::{Context, Result};
+use pa_core::agent_profile::{get_agent_profile, sanitize_component};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct CognitiveGraph {
     pub db: Surreal<Any>,
+    agent_id: String,
+    display_name: String,
+    self_node_id: String,
 }
 
 impl CognitiveGraph {
@@ -17,20 +21,39 @@ impl CognitiveGraph {
         } else {
             format!("surrealkv://{}", path)
         };
-        
+
         let db = connect(&endpoint)
             .await
             .context("Failed to connect to SurrealDB endpoint")?;
-            
+
         db.use_ns("polyverse").use_db("cognitive").await?;
-        
-        Ok(Self { db })
+
+        let profile = get_agent_profile();
+
+        Ok(Self {
+            db,
+            agent_id: sanitize_component(&profile.agent_id),
+            display_name: profile.display_name.clone(),
+            self_node_id: profile.graph_self_id.clone(),
+        })
+    }
+
+    pub fn self_node_id(&self) -> &str {
+        &self.self_node_id
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Person {
-    pub id: Option<String>, 
+    pub id: Option<String>,
     pub name: String,
 }
 
@@ -67,6 +90,8 @@ pub struct FeelsAbout {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RelationshipGraphSnapshot {
+    pub self_node_id: String,
+    pub self_display_name: String,
     pub nodes: Vec<RelationshipNode>,
     pub edges: Vec<RelationshipEdge>,
 }
@@ -115,11 +140,16 @@ fn clamp_delta(v: f32) -> f32 {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct SocialDelta {
-    #[serde(default)] pub delta_affinity: f32,
-    #[serde(default)] pub delta_attachment: f32,
-    #[serde(default)] pub delta_trust: f32,
-    #[serde(default)] pub delta_safety: f32,
-    #[serde(default)] pub delta_tension: f32,
+    #[serde(default)]
+    pub delta_affinity: f32,
+    #[serde(default)]
+    pub delta_attachment: f32,
+    #[serde(default)]
+    pub delta_trust: f32,
+    #[serde(default)]
+    pub delta_safety: f32,
+    #[serde(default)]
+    pub delta_tension: f32,
 }
 
 impl SocialDelta {
@@ -137,9 +167,12 @@ impl SocialDelta {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EmotionDelta {
     pub entity_name: String,
-    #[serde(default)] pub delta_preference: f32,
-    #[serde(default)] pub delta_stress: f32,
-    #[serde(default)] pub delta_fascination: f32,
+    #[serde(default)]
+    pub delta_preference: f32,
+    #[serde(default)]
+    pub delta_stress: f32,
+    #[serde(default)]
+    pub delta_fascination: f32,
 }
 
 impl EmotionDelta {
@@ -156,11 +189,13 @@ impl EmotionDelta {
 impl CognitiveGraph {
     pub async fn update_social_graph(&self, user_id: &str, delta: SocialDelta) -> Result<()> {
         let delta = delta.clamped();
-        let edge_id = format!("ryuuko_{}", user_id.replace(['`', '"', '\''], ""));
-        
-        let ensure_query = format!(r#"
+        let safe_user_id = sanitize_component(user_id);
+        let edge_id = format!("{}_{}", self.agent_id, safe_user_id);
+
+        let ensure_query = format!(
+            r#"
             CREATE attitudes_towards:`{}` CONTENT {{
-                in: person:ryuuko,
+                in: {},
                 out: person:`{}`,
                 affinity: 0.0,
                 attachment: 0.0,
@@ -169,20 +204,26 @@ impl CognitiveGraph {
                 tension: 0.0,
                 last_updated: time::now()
             }};
-        "#, edge_id, user_id);
+        "#,
+            edge_id, self.self_node_id, safe_user_id
+        );
         let _ = self.db.query(&ensure_query).await;
-        
-        let update_query = format!(r#"
-            UPDATE attitudes_towards:`{}` SET 
+
+        let update_query = format!(
+            r#"
+            UPDATE attitudes_towards:`{}` SET
                 affinity = math::clamp(affinity + $delta_affinity, -1.0, 1.0),
                 attachment = math::clamp(attachment + $delta_attachment, -1.0, 1.0),
                 trust = math::clamp(trust + $delta_trust, -1.0, 1.0),
                 safety = math::clamp(safety + $delta_safety, -1.0, 1.0),
                 tension = math::clamp(tension + $delta_tension, -1.0, 1.0),
                 last_updated = time::now();
-        "#, edge_id);
-        
-        self.db.query(&update_query)
+        "#,
+            edge_id
+        );
+
+        self.db
+            .query(&update_query)
             .bind(("delta_affinity", delta.delta_affinity))
             .bind(("delta_attachment", delta.delta_attachment))
             .bind(("delta_trust", delta.delta_trust))
@@ -190,20 +231,22 @@ impl CognitiveGraph {
             .bind(("delta_tension", delta.delta_tension))
             .await
             .context("Failed to UPDATE social graph")?;
-        
-        tracing::info!(user = %user_id, "Social graph updated");
-            
+
+        tracing::info!(user = %user_id, self_node = %self.self_node_id, "Social graph updated");
+
         Ok(())
     }
-    
+
     pub async fn update_illusion_graph(&self, user_id: &str, delta: SocialDelta) -> Result<()> {
         let delta = delta.clamped();
-        let edge_id = format!("{}_ryuuko", user_id.replace(['`', '"', '\''], ""));
-        
-        let ensure_query = format!(r#"
+        let safe_user_id = sanitize_component(user_id);
+        let edge_id = format!("{}_{}", safe_user_id, self.agent_id);
+
+        let ensure_query = format!(
+            r#"
             CREATE illusion_of:`{}` CONTENT {{
                 in: person:`{}`,
-                out: person:ryuuko,
+                out: {},
                 affinity: 0.0,
                 attachment: 0.0,
                 trust: 0.0,
@@ -211,20 +254,26 @@ impl CognitiveGraph {
                 tension: 0.0,
                 last_updated: time::now()
             }};
-        "#, edge_id, user_id);
+        "#,
+            edge_id, safe_user_id, self.self_node_id
+        );
         let _ = self.db.query(&ensure_query).await;
-        
-        let update_query = format!(r#"
-            UPDATE illusion_of:`{}` SET 
+
+        let update_query = format!(
+            r#"
+            UPDATE illusion_of:`{}` SET
                 affinity = math::clamp(affinity + $delta_affinity, -1.0, 1.0),
                 attachment = math::clamp(attachment + $delta_attachment, -1.0, 1.0),
                 trust = math::clamp(trust + $delta_trust, -1.0, 1.0),
                 safety = math::clamp(safety + $delta_safety, -1.0, 1.0),
                 tension = math::clamp(tension + $delta_tension, -1.0, 1.0),
                 last_updated = time::now();
-        "#, edge_id);
-        
-        self.db.query(&update_query)
+        "#,
+            edge_id
+        );
+
+        self.db
+            .query(&update_query)
             .bind(("delta_affinity", delta.delta_affinity))
             .bind(("delta_attachment", delta.delta_attachment))
             .bind(("delta_trust", delta.delta_trust))
@@ -232,54 +281,65 @@ impl CognitiveGraph {
             .bind(("delta_tension", delta.delta_tension))
             .await
             .context("Failed to UPDATE illusion graph")?;
-        
-        tracing::info!(user = %user_id, "Illusion graph updated");
-            
+
+        tracing::info!(user = %user_id, self_node = %self.self_node_id, "Illusion graph updated");
+
         Ok(())
     }
-    
+
     pub async fn update_emotion_graph(&self, entity_name: &str, delta: EmotionDelta) -> Result<()> {
         let delta = delta.clamped();
-        let edge_id = format!("ryuuko_{}", entity_name.replace(['`', '"', '\''], ""));
-        let query = format!(r#"
-            UPDATE feels_about:`{}` SET 
-                in = person:ryuuko,
+        let edge_id = format!("{}_{}", self.agent_id, sanitize_component(entity_name));
+        let query = format!(
+            r#"
+            UPDATE feels_about:`{}` SET
+                in = {},
                 out = entity:`{}`,
                 preference = math::clamp((preference OR 0.0) + $delta_preference, -1.0, 1.0),
                 stress = math::clamp((stress OR 0.0) + $delta_stress, -1.0, 1.0),
                 fascination = math::clamp((fascination OR 0.0) + $delta_fascination, -1.0, 1.0);
-        "#, edge_id, entity_name);
-        
-        let _response = self.db.query(&query)
+        "#,
+            edge_id, self.self_node_id, entity_name
+        );
+
+        self.db
+            .query(&query)
             .bind(("delta_preference", delta.delta_preference))
             .bind(("delta_stress", delta.delta_stress))
             .bind(("delta_fascination", delta.delta_fascination))
             .await?;
-            
+
         Ok(())
     }
-    
+
     pub async fn update_observed_dynamic(&self, from_user: &str, to_user: &str, tension: f32) -> Result<()> {
-        let edge_id = format!("{}_{}", from_user.replace(['`', '"', '\''], ""), to_user.replace(['`', '"', '\''], ""));
-        let query = format!(r#"
-            UPDATE interacts_with:`{}` SET 
+        let edge_id = format!(
+            "{}_{}",
+            sanitize_component(from_user),
+            sanitize_component(to_user)
+        );
+        let query = format!(
+            r#"
+            UPDATE interacts_with:`{}` SET
                 in = person:`{}`,
                 out = person:`{}`,
                 tension = math::clamp((tension OR 0.0) + $tension, -1.0, 1.0);
-        "#, edge_id, from_user, to_user);
-        
-        let _response = self.db.query(&query)
-            .bind(("tension", tension))
-            .await?;
-            
+        "#,
+            edge_id, from_user, to_user
+        );
+
+        self.db.query(&query).bind(("tension", tension)).await?;
+
         Ok(())
     }
-    
+
     pub async fn get_social_context(&self, user_id: &str) -> Result<(AttitudesTowards, IllusionOf)> {
-        let att_edge_id = format!("ryuuko_{}", user_id.replace(['`', '"', '\''], ""));
-        let ill_edge_id = format!("{}_ryuuko", user_id.replace(['`', '"', '\''], ""));
-        
-        let query = format!(r#"
+        let safe_user_id = sanitize_component(user_id);
+        let att_edge_id = format!("{}_{}", self.agent_id, safe_user_id);
+        let ill_edge_id = format!("{}_{}", safe_user_id, self.agent_id);
+
+        let query = format!(
+            r#"
             SELECT VALUE affinity FROM attitudes_towards:`{att}` LIMIT 1;
             SELECT VALUE attachment FROM attitudes_towards:`{att}` LIMIT 1;
             SELECT VALUE trust FROM attitudes_towards:`{att}` LIMIT 1;
@@ -292,10 +352,13 @@ impl CognitiveGraph {
             SELECT VALUE tension FROM illusion_of:`{ill}` LIMIT 1;
             SELECT VALUE string::concat("", last_updated) FROM attitudes_towards:`{att}` LIMIT 1;
             SELECT VALUE string::concat("", last_updated) FROM illusion_of:`{ill}` LIMIT 1;
-        "#, att = att_edge_id, ill = ill_edge_id);
-        
+        "#,
+            att = att_edge_id,
+            ill = ill_edge_id
+        );
+
         let mut response = self.db.query(&query).await?;
-        
+
         fn extract_f32(response: &mut surrealdb::IndexedResults, idx: usize) -> f32 {
             let val: Result<Vec<f64>, _> = response.take(idx);
             match val {
@@ -303,15 +366,20 @@ impl CognitiveGraph {
                 Err(_) => 0.0,
             }
         }
-        
+
         fn extract_string(response: &mut surrealdb::IndexedResults, idx: usize) -> String {
-            response.take::<Vec<String>>(idx)
+            response
+                .take::<Vec<String>>(idx)
                 .unwrap_or_default()
-                .first().cloned().unwrap_or_default()
+                .first()
+                .cloned()
+                .unwrap_or_default()
         }
-        
+
         fn calc_decay(timestamp_str: &str) -> f32 {
-            if timestamp_str.is_empty() { return 1.0; }
+            if timestamp_str.is_empty() {
+                return 1.0;
+            }
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp_str) {
                 let elapsed = chrono::Utc::now().signed_duration_since(dt);
                 let days = elapsed.num_hours() as f64 / 24.0;
@@ -321,7 +389,7 @@ impl CognitiveGraph {
             }
             1.0
         }
-        
+
         let raw_att = AttitudesTowards {
             affinity: extract_f32(&mut response, 0),
             attachment: extract_f32(&mut response, 1),
@@ -329,7 +397,7 @@ impl CognitiveGraph {
             safety: extract_f32(&mut response, 3),
             tension: extract_f32(&mut response, 4),
         };
-        
+
         let raw_ill = IllusionOf {
             affinity: extract_f32(&mut response, 5),
             attachment: extract_f32(&mut response, 6),
@@ -337,12 +405,12 @@ impl CognitiveGraph {
             safety: extract_f32(&mut response, 8),
             tension: extract_f32(&mut response, 9),
         };
-        
+
         let att_ts = extract_string(&mut response, 10);
         let ill_ts = extract_string(&mut response, 11);
         let att_decay = calc_decay(&att_ts);
         let ill_decay = calc_decay(&ill_ts);
-        
+
         let attitudes = AttitudesTowards {
             affinity: raw_att.affinity * att_decay,
             attachment: raw_att.attachment * att_decay,
@@ -350,7 +418,7 @@ impl CognitiveGraph {
             safety: raw_att.safety * att_decay,
             tension: raw_att.tension * att_decay,
         };
-        
+
         let illusion = IllusionOf {
             affinity: raw_ill.affinity * ill_decay,
             attachment: raw_ill.attachment * ill_decay,
@@ -358,7 +426,7 @@ impl CognitiveGraph {
             safety: raw_ill.safety * ill_decay,
             tension: raw_ill.tension * ill_decay,
         };
-        
+
         Ok((attitudes, illusion))
     }
 
@@ -406,12 +474,12 @@ impl CognitiveGraph {
                 let source = normalize_record_id(&raw.source);
                 let target = normalize_record_id(&raw.target);
 
-                nodes
-                    .entry(source.clone())
-                    .or_insert_with(|| build_relationship_node(&source));
-                nodes
-                    .entry(target.clone())
-                    .or_insert_with(|| build_relationship_node(&target));
+                nodes.entry(source.clone()).or_insert_with(|| {
+                    build_relationship_node(&source, &self.self_node_id, &self.display_name)
+                });
+                nodes.entry(target.clone()).or_insert_with(|| {
+                    build_relationship_node(&target, &self.self_node_id, &self.display_name)
+                });
 
                 edges.push(RelationshipEdge {
                     id: format!("{}:{}->{}", kind, source, target),
@@ -427,10 +495,10 @@ impl CognitiveGraph {
             }
         }
 
-        if !nodes.contains_key("person:ryuuko") {
+        if !nodes.contains_key(&self.self_node_id) {
             nodes.insert(
-                "person:ryuuko".to_string(),
-                build_relationship_node("person:ryuuko"),
+                self.self_node_id.clone(),
+                build_relationship_node(&self.self_node_id, &self.self_node_id, &self.display_name),
             );
         }
 
@@ -439,6 +507,8 @@ impl CognitiveGraph {
         edges.sort_by(|a, b| a.id.cmp(&b.id));
 
         Ok(RelationshipGraphSnapshot {
+            self_node_id: self.self_node_id.clone(),
+            self_display_name: self.display_name.clone(),
             nodes: node_list,
             edges,
         })
@@ -460,9 +530,8 @@ fn take_relationship_edges(
         .collect()
 }
 
-fn build_relationship_node(id: &str) -> RelationshipNode {
-    let label = id.rsplit(':').next().unwrap_or(id).to_string();
-    let kind = if id == "person:ryuuko" {
+fn build_relationship_node(id: &str, self_node_id: &str, self_display_name: &str) -> RelationshipNode {
+    let kind = if id == self_node_id {
         "agent"
     } else if id.starts_with("person:") {
         "person"
@@ -470,6 +539,12 @@ fn build_relationship_node(id: &str) -> RelationshipNode {
         "entity"
     } else {
         "unknown"
+    };
+
+    let label = if id == self_node_id {
+        self_display_name.to_string()
+    } else {
+        id.rsplit(':').next().unwrap_or(id).to_string()
     };
 
     RelationshipNode {
@@ -486,25 +561,34 @@ mod tests {
     #[tokio::test]
     async fn test_surreal_extraction() -> Result<()> {
         let graph = CognitiveGraph::new("memory").await?;
-        
-        let mut response = graph.db.query(r#"
-            RELATE person:ryuuko->attitudes_towards->person:tester 
+
+        let query = format!(
+            r#"
+            RELATE {}->attitudes_towards->person:tester
             SET affinity = 0.5, attachment = 0.2;
-            
-            SELECT affinity, attachment, trust, safety, tension FROM person:ryuuko->attitudes_towards WHERE out = person:tester;
-        "#).await?;
-        
+
+            SELECT affinity, attachment, trust, safety, tension FROM {}->attitudes_towards WHERE out = person:tester;
+        "#,
+            graph.self_node_id, graph.self_node_id
+        );
+
+        let mut response = graph.db.query(query).await?;
+
         let extracted: Option<serde_json::Value> = response.take(1)?;
         println!("Extracted SQL Value: {:#?}", extracted);
-        
+
         Ok(())
     }
 
     #[tokio::test]
     async fn test_upsert_extraction() -> Result<()> {
         let graph = CognitiveGraph::new("memory").await?;
-        
-        graph.db.query("DELETE person; DELETE attitudes_towards;").await.unwrap();
+
+        graph
+            .db
+            .query("DELETE person; DELETE attitudes_towards;")
+            .await
+            .unwrap();
 
         let s_delta = SocialDelta {
             delta_affinity: 0.25,
@@ -522,7 +606,7 @@ mod tests {
         graph.update_social_graph("tester_upsert", s_delta).await?;
         let (attitudes2, _) = graph.get_social_context("tester_upsert").await?;
         println!("Accumulated Attitudes: {:#?}", attitudes2);
-        
+
         assert!(attitudes2.affinity > 0.0);
         Ok(())
     }

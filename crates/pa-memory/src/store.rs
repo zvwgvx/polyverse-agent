@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
 use tracing::{debug, info};
@@ -12,6 +14,7 @@ impl MemoryStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open memory database: {}", path))?;
+        configure_writer_connection(&conn)?;
 
         let store = Self { conn };
         store.init_tables()?;
@@ -23,6 +26,7 @@ impl MemoryStore {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()
             .context("Failed to open in-memory database")?;
+        configure_reader_connection(&conn)?;
 
         let store = Self { conn };
         store.init_tables()?;
@@ -35,6 +39,7 @@ impl MemoryStore {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .with_context(|| format!("Failed to open memory database read-only: {}", path))?;
+        configure_reader_connection(&conn)?;
 
         Ok(Self { conn })
     }
@@ -219,6 +224,25 @@ impl MemoryStore {
                 .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
         Ok(count)
     }
+}
+
+fn configure_writer_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_millis(1500))
+        .context("Failed to set SQLite busy timeout")?;
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 1000;
+        ",
+    )
+    .context("Failed to configure SQLite writer connection")?;
+    Ok(())
+}
+
+fn configure_reader_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_millis(1500))
+        .context("Failed to set SQLite busy timeout")?;
+    Ok(())
 }
 
 #[cfg(test)]
