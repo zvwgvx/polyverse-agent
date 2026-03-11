@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 const PROFILE_RELATIVE_PATH: &str = "config/agent_profile.toml";
 const PROFILE_SAMPLE_RELATIVE_PATH: &str = "config/agent_profile.toml.sample";
+const DEFAULT_DATA_DIR: &str = "data/polyverse-agent";
 
 static AGENT_PROFILE: OnceLock<AgentProfile> = OnceLock::new();
 
@@ -70,17 +71,17 @@ impl AgentProfile {
 
         self.memory_db_path = self.memory_db_path.trim().to_string();
         if self.memory_db_path.is_empty() {
-            self.memory_db_path = format!("data/{}_memory.db", self.agent_id);
+            self.memory_db_path = format!("{}/memory.db", DEFAULT_DATA_DIR);
         }
 
         self.graph_db_path = self.graph_db_path.trim().to_string();
         if self.graph_db_path.is_empty() {
-            self.graph_db_path = format!("data/{}_graph", self.agent_id);
+            self.graph_db_path = format!("{}/graph", DEFAULT_DATA_DIR);
         }
 
         self.episodic_db_path = self.episodic_db_path.trim().to_string();
         if self.episodic_db_path.is_empty() {
-            self.episodic_db_path = format!("data/{}_lancedb", self.agent_id);
+            self.episodic_db_path = format!("{}/lancedb", DEFAULT_DATA_DIR);
         }
 
         self.agent_timezone_label = self.agent_timezone_label.trim().to_string();
@@ -231,6 +232,9 @@ mod tests {
         assert_eq!(profile.agent_id, "agent");
         assert_eq!(profile.display_name, "Agent");
         assert_eq!(profile.graph_self_id, "person:agent");
+        assert_eq!(profile.memory_db_path, "data/polyverse-agent/memory.db");
+        assert_eq!(profile.graph_db_path, "data/polyverse-agent/graph");
+        assert_eq!(profile.episodic_db_path, "data/polyverse-agent/lancedb");
     }
 
     #[test]

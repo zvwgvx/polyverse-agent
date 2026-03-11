@@ -18,7 +18,9 @@
 - `COCKPIT_MAX_RECENT_EVENTS=300`
 - `STATE_SCHEMA_PATH=config/state_schema.v0.json`
 - `PA_AGENT_PROFILE=config/agent_profile.toml`
-- `MEMORY_DB_PATH=data/agent_memory.db` (optional override)
+- `MEMORY_DB_PATH=data/polyverse-agent/memory.db` (optional override)
+- `GRAPH_DB_PATH=data/polyverse-agent/graph` (optional override)
+- `LANCE_DB_PATH=data/polyverse-agent/lancedb` (optional override)
 
 ## API
 - `GET /api/cockpit/overview`

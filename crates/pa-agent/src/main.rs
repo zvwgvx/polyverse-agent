@@ -246,12 +246,26 @@ async fn main() -> Result<()> {
     use std::sync::Arc;
     use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder, compressor::SemanticCompressor};
 
-    let lancedb_path = agent_profile.episodic_db_path.clone();
-    
-    if let Some(parent) = std::path::Path::new(&lancedb_path).parent() {
-        if !parent.exists() {
+    let memory_db_path = agent_profile.memory_db_path.clone();
+    if let Some(parent) = std::path::Path::new(&memory_db_path).parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
             std::fs::create_dir_all(parent)?;
         }
+    }
+
+    let graph_db_path = agent_profile.graph_db_path.clone();
+    if graph_db_path != "memory" {
+        let graph_path = std::path::Path::new(&graph_db_path);
+        if !graph_path.exists() {
+            std::fs::create_dir_all(graph_path)?;
+        }
+    }
+
+    let lancedb_path = agent_profile.episodic_db_path.clone();
+    
+    let lancedb_path_obj = std::path::Path::new(&lancedb_path);
+    if !lancedb_path_obj.exists() {
+        std::fs::create_dir_all(lancedb_path_obj)?;
     }
 
     info!("Initializing Episodic Memory and Embedding Engine...");
@@ -266,13 +280,11 @@ async fn main() -> Result<()> {
     let compressor_opt = SemanticCompressor::new().ok().map(Arc::new);
 
     info!("Initializing SurrealDB Cognitive Graph...");
-    let cognitive_graph = pa_memory::graph::CognitiveGraph::new(&agent_profile.graph_db_path).await?;
+    let cognitive_graph = pa_memory::graph::CognitiveGraph::new(&graph_db_path).await?;
 
     if compressor_opt.is_none() {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
     }
-
-    let memory_db_path = agent_profile.memory_db_path.clone();
 
     let mut memory_worker = MemoryWorker::new(&memory_db_path)
         .with_episodic(Arc::clone(&episodic))
