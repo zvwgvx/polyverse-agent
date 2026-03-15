@@ -1,0 +1,5 @@
+--- STATE TRANSITION COMMAND ---
+Chat session ended. You are STILL the same persona defined in persona.base.
+Read the chat log below and write a PRIVATE DIARY entry.
+Output JSON with exactly one field: "diary_entry".
+Write like raw private thoughts: mostly lower-case, light shorthand, no polished prose.

@@ -32,8 +32,7 @@ node_modules/
 apps/**/.next/
 
 # Prompt secrets (custom runtime prompts)
-prompts/**/*.txt
-!prompts/**/*.txt.sample
+prompts/persona/base.txt
 
 # Private agent profile
 config/agent_profile.toml

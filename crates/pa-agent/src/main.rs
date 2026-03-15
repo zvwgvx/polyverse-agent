@@ -14,7 +14,11 @@ use pa_cockpit_api::{CockpitApiConfig, CockpitWorker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
-use pa_state::StateStore;
+use pa_state::{
+    StateCommandWorker, StateDriftWorker, StateEnvironmentWorker, StateGoalWorker, StateIntentWorker,
+    StateStore, StateSystemWorker, StateUserWorker,
+};
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -206,6 +210,11 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(300);
+    let state_system_enabled = parse_env_bool("STATE_SYSTEM_ENABLED", true);
+    let state_system_interval_ms = std::env::var("STATE_SYSTEM_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1_000);
     let state_schema_path =
         std::env::var("STATE_SCHEMA_PATH").unwrap_or_else(|_| "config/state_schema.v0.json".to_string());
 
@@ -220,6 +229,10 @@ async fn main() -> Result<()> {
             None
         }
     };
+
+    if let Some(store) = &state_store {
+        let _ = store.recompute_derived().await;
+    }
 
     if config.discord_bot.enabled && !config.discord_bot.token.is_empty() {
         info!("Registering Discord Bot worker");
@@ -299,8 +312,53 @@ async fn main() -> Result<()> {
     worker_count += 1;
     info!("Registered Memory worker");
 
+    let state_store_for_cockpit = state_store.clone();
+    let state_store_for_affect = state_store.clone();
+    let state_store_for_dialogue = state_store.clone();
+    let state_store_for_drift = state_store.clone();
+    let state_store_for_intent = state_store.clone();
+    let state_store_for_command = state_store.clone();
+    let state_store_for_user = state_store.clone();
+    let state_store_for_goal = state_store.clone();
+    let state_store_for_env = state_store.clone();
+    let state_store_for_system = state_store.clone();
+
+    if let Some(store) = state_store_for_drift {
+        supervisor.register(StateDriftWorker::new(store));
+        worker_count += 1;
+    }
+    if let Some(store) = state_store_for_intent {
+        supervisor.register(StateIntentWorker::new(store));
+        worker_count += 1;
+    }
+    if let Some(store) = state_store_for_command {
+        supervisor.register(StateCommandWorker::new(store));
+        worker_count += 1;
+    }
+    if let Some(store) = state_store_for_user {
+        supervisor.register(StateUserWorker::new(store));
+        worker_count += 1;
+    }
+    if let Some(store) = state_store_for_goal {
+        supervisor.register(StateGoalWorker::new(store));
+        worker_count += 1;
+    }
+    if let Some(store) = state_store_for_env {
+        supervisor.register(StateEnvironmentWorker::new(store));
+        worker_count += 1;
+    }
+    if state_system_enabled {
+        if let Some(store) = state_store_for_system {
+            supervisor.register(
+                StateSystemWorker::new(store)
+                    .with_interval(Duration::from_millis(state_system_interval_ms.max(200))),
+            );
+            worker_count += 1;
+        }
+    }
+
     if cockpit_enabled {
-        if let Some(store) = state_store {
+        if let Some(store) = state_store_for_cockpit {
             info!(bind = %cockpit_bind, "Registering local cockpit API worker");
             supervisor.register(
                 CockpitWorker::new(
@@ -342,11 +400,17 @@ async fn main() -> Result<()> {
             "Registering dialogue engine worker"
         );
         supervisor.register(
-            DialogueEngineWorker::new(dialogue_engine_config)
-                .with_memory(Arc::clone(&short_term_handle))
-                .with_episodic(Arc::clone(&episodic))
-                .with_embedder(Arc::clone(&embedder))
-                .with_graph(cognitive_graph.clone()),
+            {
+                let mut worker = DialogueEngineWorker::new(dialogue_engine_config)
+                    .with_memory(Arc::clone(&short_term_handle))
+                    .with_episodic(Arc::clone(&episodic))
+                    .with_embedder(Arc::clone(&embedder))
+                    .with_graph(cognitive_graph.clone());
+                if let Some(store) = state_store_for_dialogue {
+                    worker = worker.with_state_store(store);
+                }
+                worker
+            },
         );
         worker_count += 1;
     } else {
@@ -383,13 +447,17 @@ async fn main() -> Result<()> {
                 model = %affect_evaluator_config.model,
                 "Registering Affect Evaluator JSON worker"
             );
-            supervisor.register(AffectEvaluatorWorker::new(
+            let mut affect_worker = AffectEvaluatorWorker::new(
                 affect_evaluator_config,
                 cognitive_graph.clone(),
                 Arc::clone(&short_term_handle),
                 Some(Arc::clone(&episodic)),
                 Some(Arc::clone(&embedder)),
-            ));
+            );
+            if let Some(store) = state_store_for_affect {
+                affect_worker = affect_worker.with_state_store(store);
+            }
+            supervisor.register(affect_worker);
             worker_count += 1;
         }
     } else {

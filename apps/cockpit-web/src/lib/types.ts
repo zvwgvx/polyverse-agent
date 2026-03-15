@@ -35,6 +35,9 @@ export type StateRow = {
   update_mode: string;
   range_min: number;
   range_max: number;
+  baseline?: number;
+  decay_k?: number;
+  max_delta_per_turn?: number;
   value: number;
   updated_at: string;
   source: string;
@@ -71,6 +74,17 @@ export type StateDeltaLog = {
   actor: string;
   source: string;
   timestamp: string;
+};
+
+export type StateMetricEntry = {
+  source: string;
+  count: number;
+};
+
+export type StateMetricsSnapshot = {
+  total_updates: number;
+  last_updated_at: string | null;
+  by_source: StateMetricEntry[];
 };
 
 export type ManualPatchRequest = {

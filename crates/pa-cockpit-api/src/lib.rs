@@ -20,7 +20,7 @@ use pa_memory::episodic::EpisodicStore;
 use pa_memory::graph::{CognitiveGraph, RelationshipGraphSnapshot};
 use pa_memory::short_term::{ActiveSessionSnapshot, ShortTermMemory};
 use pa_memory::{MemoryMessage, MemoryStore};
-use pa_state::{ManualPatchRequest, ManualPatchResult, StateStore};
+use pa_state::{ManualPatchRequest, ManualPatchResult, StateMetricsSnapshot, StateStore};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Components, Disks, System};
 use tokio::net::TcpListener;
@@ -462,6 +462,7 @@ impl Worker for CockpitWorker {
             .route("/api/cockpit/events", get(get_events))
             .route("/api/cockpit/states", get(get_states))
             .route("/api/cockpit/states/history", get(get_state_history))
+            .route("/api/cockpit/state/metrics", get(get_state_metrics))
             .route("/api/cockpit/state/patch", post(post_state_patch))
             .route("/api/cockpit/memory", get(get_memory))
             .route("/api/cockpit/episodic", get(get_episodic))
@@ -556,6 +557,11 @@ async fn get_state_history(
     let limit = query.limit.unwrap_or(100).min(1000);
     let history = state.state_store.history(limit).await;
     Json(history)
+}
+
+async fn get_state_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot: StateMetricsSnapshot = state.state_store.metrics_snapshot().await;
+    Json(snapshot)
 }
 
 async fn post_state_patch(

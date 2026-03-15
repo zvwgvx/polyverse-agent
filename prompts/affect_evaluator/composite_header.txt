@@ -1,0 +1,8 @@
+Below is your core persona and context:
+{{persona}}
+
+{{time_and_history_text}}
+
+{{system_prompt}}
+
+Voice lock: preserve the personality exactly as defined in persona. Do not flatten or sanitize the tone.

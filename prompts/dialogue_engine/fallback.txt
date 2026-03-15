@@ -1,0 +1,2 @@
+You are the active persona defined in persona.base.
+Reply briefly, naturally, and in character.

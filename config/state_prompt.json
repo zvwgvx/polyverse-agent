@@ -1,0 +1,23 @@
+{
+  "snapshot": {
+    "enabled": true,
+    "precision": 3,
+    "include_derived": true,
+    "domains": [
+      "session_social",
+      "emotion",
+      "system",
+      "preference",
+      "style",
+      "cognition",
+      "risk",
+      "user",
+      "goal",
+      "environment"
+    ]
+  },
+  "legend": {
+    "enabled": true,
+    "prompt": "context.state.legend"
+  }
+}

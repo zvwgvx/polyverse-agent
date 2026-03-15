@@ -9,6 +9,7 @@ use pa_memory::graph::{CognitiveGraph, SocialDelta, EmotionDelta};
 use pa_memory::short_term::ShortTermMemory;
 use pa_memory::{episodic::EpisodicStore, embedder::MemoryEmbedder};
 use pa_memory::types::ConversationKey;
+use pa_state::{EventDeltaRequest, StateStore};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -65,6 +66,7 @@ struct AffectEvaluatorResponseFormat {
     social_updates: Vec<SocialTargetUpdate>,
     observed_dynamics: Option<Vec<ObservedDynamic>>,
     entity_updates: Option<Vec<EntityUpdate>>,
+    emotion_delta: Option<EmotionDeltaReq>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +110,18 @@ struct EntityUpdate {
     delta_fascination: f32,
 }
 
+#[derive(Debug, Deserialize)]
+struct EmotionDeltaReq {
+    delta_valence: f32,
+    delta_arousal: f32,
+    delta_anxiety: f32,
+    delta_anger: f32,
+    delta_joy: f32,
+    delta_sadness: f32,
+    delta_confidence: f32,
+    delta_stability: f32,
+}
+
 pub struct AffectEvaluatorWorker {
     pub config: AffectEvaluatorConfig,
     status: WorkerStatus,
@@ -117,6 +131,7 @@ pub struct AffectEvaluatorWorker {
     pub persona_prompt: String,
     pub episodic: Option<Arc<EpisodicStore>>,
     pub embedder: Option<Arc<MemoryEmbedder>>,
+    pub state_store: Option<StateStore>,
 }
 
 impl AffectEvaluatorWorker {
@@ -145,7 +160,13 @@ impl AffectEvaluatorWorker {
             persona_prompt,
             episodic,
             embedder,
+            state_store: None,
         }
+    }
+
+    pub fn with_state_store(mut self, store: StateStore) -> Self {
+        self.state_store = Some(store);
+        self
     }
 
     fn build_system_prompt(&self) -> String {
@@ -182,6 +203,7 @@ impl Worker for AffectEvaluatorWorker {
         let persona_prompt = self.persona_prompt.clone();
         let graph = self.graph.clone();
         let short_term = self.short_term.clone();
+        let state_store = self.state_store.clone();
         
         let mut active_tasks = tokio::task::JoinSet::new();
 
@@ -207,12 +229,13 @@ impl Worker for AffectEvaluatorWorker {
                             let sp = system_prompt.clone();
                             let pp = persona_prompt.clone();
                             let g = graph.clone();
+                            let st = state_store.clone();
                             
 		                            let e = self.episodic.clone();
 		                            let em = self.embedder.clone();
 		                            
 	                            active_tasks.spawn(async move {
-	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, &target_user, &message_id, history, &current_msg, e, em).await;
+	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, st, &target_user, &message_id, history, &current_msg, e, em).await;
 	                            });
 	                        }
                         Ok(_) => {}
@@ -247,6 +270,7 @@ impl AffectEvaluatorWorker {
         system_prompt: &str,
         persona: &str,
         graph: &CognitiveGraph,
+        state_store: Option<StateStore>,
         user_id: &str,
         message_id: &str,
         history: Vec<(String, String, String)>,
@@ -350,14 +374,15 @@ impl AffectEvaluatorWorker {
         };
         
         let parsed: Result<AffectEvaluatorResponseFormat, _> = serde_json::from_str(clean_json);
-	        match parsed {
-	            Ok(data) => {
+                match parsed {
+                    Ok(data) => {
 	                debug!("Affect evaluator completed");
 	                
-	                for social in data.social_updates {
-	                    let s_delta = SocialDelta {
-	                        delta_affinity: social.actual_perception_delta.delta_affinity,
-	                        delta_attachment: social.actual_perception_delta.delta_attachment,
+                        let mut session_delta: Option<SocialDeltaReq> = None;
+                        for social in data.social_updates {
+                            let s_delta = SocialDelta {
+                                delta_affinity: social.actual_perception_delta.delta_affinity,
+                                delta_attachment: social.actual_perception_delta.delta_attachment,
                         delta_trust: social.actual_perception_delta.delta_trust,
                         delta_safety: social.actual_perception_delta.delta_safety,
                         delta_tension: social.actual_perception_delta.delta_tension,
@@ -367,6 +392,10 @@ impl AffectEvaluatorWorker {
                         error!("Failed to update social graph for {}: {}", social.target_user, e);
                     }
                     
+                    if social.role == "chat_partner" || social.target_user == user_id {
+                        session_delta = Some(social.actual_perception_delta);
+                    }
+
                     if social.role == "chat_partner" {
                         if let Some(illusion) = social.projected_illusion_delta {
                             let i_delta = SocialDelta {
@@ -380,27 +409,171 @@ impl AffectEvaluatorWorker {
                                 error!("Failed to update illusion graph for {}: {}", social.target_user, e);
                             }
 	                        }
-	                    }
-	                }
-	                
-	                if let Some(dynamics) = data.observed_dynamics {
+                    }
+                }
+                
+                if let Some(dynamics) = data.observed_dynamics {
 	                    for dyn_update in dynamics {
 	                        if let Err(e) = graph.update_observed_dynamic(&dyn_update.from_user, &dyn_update.to_user, dyn_update.estimated_tension).await {
 	                            error!("Failed to update observed dynamics: {}", e);
                         }
-	                    }
-	                }
-	                
-	                if let Some(entities) = data.entity_updates {
-	                    for entity in entities {
-	                        let e_delta = EmotionDelta {
-	                            entity_name: entity.entity_name.clone(),
+                    }
+                }
+                
+                let mut pref_sum = 0.0f64;
+                let mut stress_sum = 0.0f64;
+                let mut fasc_sum = 0.0f64;
+                let mut pref_count = 0usize;
+                if let Some(entities) = data.entity_updates {
+                    for entity in entities {
+                        let e_delta = EmotionDelta {
+                            entity_name: entity.entity_name.clone(),
                             delta_preference: entity.delta_preference,
                             delta_stress: entity.delta_stress,
                             delta_fascination: entity.delta_fascination,
                         };
                         if let Err(e) = graph.update_emotion_graph(&entity.entity_name, e_delta).await {
                             error!("Failed to update emotion graph for {}: {}", entity.entity_name, e);
+                        }
+                        pref_sum += entity.delta_preference as f64;
+                        stress_sum += entity.delta_stress as f64;
+                        fasc_sum += entity.delta_fascination as f64;
+                        pref_count += 1;
+                    }
+                }
+
+                if let Some(store) = state_store {
+                    if !store.mark_event_if_new("affect", message_id).await {
+                        return;
+                    }
+                    let mut updates = Vec::new();
+                    if let Some(delta) = session_delta {
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "session_social.affinity".to_string(),
+                            delta: delta.delta_affinity as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "session_social.attachment".to_string(),
+                            delta: delta.delta_attachment as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "session_social.trust".to_string(),
+                            delta: delta.delta_trust as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "session_social.safety".to_string(),
+                            delta: delta.delta_safety as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "session_social.tension".to_string(),
+                            delta: delta.delta_tension as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                    }
+
+                    if let Some(delta) = data.emotion_delta {
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.valence".to_string(),
+                            delta: delta.delta_valence as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.arousal".to_string(),
+                            delta: delta.delta_arousal as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.anxiety".to_string(),
+                            delta: delta.delta_anxiety as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.anger".to_string(),
+                            delta: delta.delta_anger as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.joy".to_string(),
+                            delta: delta.delta_joy as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.sadness".to_string(),
+                            delta: delta.delta_sadness as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.confidence".to_string(),
+                            delta: delta.delta_confidence as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "emotion.stability".to_string(),
+                            delta: delta.delta_stability as f64,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                    }
+                    if pref_count > 0 {
+                        let count = pref_count as f64;
+                        let avg_pref = pref_sum / count;
+                        let avg_stress = stress_sum / count;
+                        let avg_fasc = fasc_sum / count;
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "preference.curiosity".to_string(),
+                            delta: avg_pref,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "preference.fascination".to_string(),
+                            delta: avg_fasc,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                        updates.push(EventDeltaRequest {
+                            dimension_id: "preference.stress".to_string(),
+                            delta: avg_stress,
+                            reason: "affect_evaluator".to_string(),
+                            actor: user_id.to_string(),
+                            source: "affect_evaluator".to_string(),
+                        });
+                    }
+
+                    if !updates.is_empty() {
+                        if let Err(e) = store.apply_event_deltas(&updates).await {
+                            warn!("Failed to update session/emotion state: {}", e);
                         }
                     }
                 }

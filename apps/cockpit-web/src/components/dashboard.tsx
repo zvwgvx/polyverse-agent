@@ -14,6 +14,7 @@ import type {
   RelationshipEdge,
   RelationshipGraphSnapshot,
   StateDeltaLog,
+  StateMetricsSnapshot,
   StateRow,
   SystemSnapshot
 } from "@/lib/types";
@@ -52,6 +53,7 @@ type LoadLiveOptions = {
   events?: boolean;
   prompts?: boolean;
   history?: boolean;
+  stateMetrics?: boolean;
   memory?: boolean;
   relationships?: boolean;
   system?: boolean;
@@ -379,6 +381,7 @@ export function Dashboard() {
   const [events, setEvents] = useState<CockpitEventView[]>([]);
   const [prompts, setPrompts] = useState<PromptEntry[]>([]);
   const [history, setHistory] = useState<StateDeltaLog[]>([]);
+  const [stateMetrics, setStateMetrics] = useState<StateMetricsSnapshot | null>(null);
   const [memory, setMemory] = useState<MemoryOverview | null>(null);
   const [episodic, setEpisodic] = useState<EpisodicOverview | null>(null);
   const [relationships, setRelationships] = useState<RelationshipGraphSnapshot | null>(null);
@@ -388,6 +391,7 @@ export function Dashboard() {
   const [error, setError] = useState<string>("");
   const [activeView, setActiveView] = useState<ViewId>("overview");
   const [selectedPromptId, setSelectedPromptId] = useState<string>("");
+  const [trendDimension, setTrendDimension] = useState<string>("");
   const [promptDocument, setPromptDocument] = useState<PromptDocument | null>(null);
   const [promptDraft, setPromptDraft] = useState<string>("");
   const [promptBusy, setPromptBusy] = useState<boolean>(false);
@@ -417,6 +421,89 @@ export function Dashboard() {
     const values = Array.from(new Set(states.map((state) => state.domain))).sort();
     return ["all", ...values];
   }, [states]);
+
+  const snapshotLines = useMemo(() => {
+    if (!states.length) {
+      return [];
+    }
+    const order = [
+      "session_social",
+      "emotion",
+      "system",
+      "preference",
+      "style",
+      "cognition",
+      "risk",
+      "user",
+      "goal",
+      "environment",
+    ];
+    const lines: string[] = [];
+    order.forEach((domain) => {
+      const rows = states.filter((row) => row.domain === domain);
+      if (!rows.length) {
+        return;
+      }
+      const parts = rows.map((row) => {
+        const key = row.id.split(".")[1] || row.id;
+        return `${key}=${row.value.toFixed(3)}`;
+      });
+      lines.push(`${domain}: ${parts.join(", ")}`);
+    });
+    return lines;
+  }, [states]);
+
+  const trendOptions = useMemo(() => {
+    return states.map((row) => row.id).sort();
+  }, [states]);
+
+  useEffect(() => {
+    if (!trendDimension && trendOptions.length) {
+      setTrendDimension(trendOptions[0]);
+    }
+  }, [trendDimension, trendOptions]);
+
+  const trendSeries = useMemo(() => {
+    if (!trendDimension) {
+      return [];
+    }
+    const data = history
+      .filter((entry) => entry.dimension_id === trendDimension)
+      .slice(0, 60)
+      .reverse();
+    return data.map((entry, idx) => ({ x: idx, y: entry.after }));
+  }, [history, trendDimension]);
+
+  const trendStats = useMemo(() => {
+    if (!trendSeries.length) {
+      return null;
+    }
+    const values = trendSeries.map((point) => point.y);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const last = values[values.length - 1];
+    return { min, max, last };
+  }, [trendSeries]);
+
+  const trendPath = useMemo(() => {
+    if (!trendSeries.length) {
+      return "";
+    }
+    const width = 280;
+    const height = 90;
+    const padding = 6;
+    const ys = trendSeries.map((p) => p.y);
+    const min = Math.min(...ys);
+    const max = Math.max(...ys);
+    const range = Math.max(max - min, 1e-6);
+    return trendSeries
+      .map((point, idx) => {
+        const x = padding + (idx / Math.max(trendSeries.length - 1, 1)) * (width - padding * 2);
+        const y = padding + (1 - (point.y - min) / range) * (height - padding * 2);
+        return `${idx === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }, [trendSeries]);
 
   const filteredStates = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -630,6 +717,14 @@ export function Dashboard() {
         );
       }
 
+      if (options.stateMetrics) {
+        tasks.push(
+          fetchJson<StateMetricsSnapshot>("/api/cockpit/state/metrics").then((metricData) => {
+            setStateMetrics(metricData);
+          })
+        );
+      }
+
       if (options.memory) {
         tasks.push(
           fetchJson<MemoryOverview>("/api/cockpit/memory?limit=36").then((memoryData) => {
@@ -771,7 +866,7 @@ export function Dashboard() {
         throw new Error(text || "Patch failed");
       }
 
-      await loadLive({ overview: true, states: true, history: true });
+      await loadLive({ overview: true, states: true, history: true, stateMetrics: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Patch failed");
     } finally {
@@ -801,7 +896,7 @@ export function Dashboard() {
         await loadLive({ overview: true, prompts: true });
         break;
       case "state":
-        await loadLive({ overview: true, states: true, history: true });
+        await loadLive({ overview: true, states: true, history: true, stateMetrics: true });
         break;
     }
   }
@@ -813,6 +908,7 @@ export function Dashboard() {
       events: true,
       prompts: true,
       history: true,
+      stateMetrics: true,
       memory: true,
       system: true
     });
@@ -1745,6 +1841,118 @@ export function Dashboard() {
 
       {activeView === "state" ? (
         <>
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <div className="panel-kicker">Quick commands</div>
+                <h2>/state</h2>
+              </div>
+            </div>
+            <div className="metric-stack">
+              <div className="metric-row">
+                <span>Set values</span>
+                <strong className="mono">/state warmth=0.7 formality=0.6 brevity=0.4</strong>
+              </div>
+              <div className="metric-row">
+                <span>Apply deltas</span>
+                <strong className="mono">/state preference.curiosity+=0.1 preference.stress-=0.05</strong>
+              </div>
+              <div className="metric-row">
+                <span>Aliases</span>
+                <strong className="mono">warmth, playfulness, empathy, risk, pref_brevity</strong>
+              </div>
+            </div>
+            <div className="section-note">
+              Commands are accepted only in DM, mention, or CLI. Use <span className="mono">=</span> to set and
+              <span className="mono"> +=</span>/<span className="mono"> -=</span> for deltas.
+            </div>
+          </section>
+
+          <section className="split-grid">
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <div className="panel-kicker">Prompt snapshot</div>
+                  <h2>State Snapshot</h2>
+                </div>
+              </div>
+              <div className="scroll-list">
+                {snapshotLines.length ? (
+                  snapshotLines.map((line) => (
+                    <div key={line} className="mono">
+                      {line}
+                    </div>
+                  ))
+                ) : (
+                  <div className="muted">No state data loaded.</div>
+                )}
+              </div>
+            </article>
+
+            <article className="panel">
+              <div className="panel-head">
+                <div>
+                  <div className="panel-kicker">Trend</div>
+                  <h2>State Timeline</h2>
+                </div>
+                <select
+                  value={trendDimension}
+                  onChange={(event) => setTrendDimension(event.target.value)}
+                >
+                  {trendOptions.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {trendSeries.length ? (
+                <>
+                  <svg className="chart-svg" viewBox="0 0 280 90" preserveAspectRatio="none">
+                    <path className="chart-grid-line" d="M0,30 H280" />
+                    <path className="chart-grid-line" d="M0,60 H280" />
+                    <path className="chart-line" d={trendPath} />
+                  </svg>
+                  <div className="chart-foot">
+                    <span>min {trendStats?.min.toFixed(3) ?? "-"}</span>
+                    <span>last {trendStats?.last.toFixed(3) ?? "-"}</span>
+                    <span>max {trendStats?.max.toFixed(3) ?? "-"}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="muted">No history for this dimension yet.</div>
+              )}
+            </article>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <div className="panel-kicker">Update counters</div>
+                <h2>State Metrics</h2>
+              </div>
+              <div className="section-note">
+                {stateMetrics?.last_updated_at ? `last ${formatAgo(stateMetrics.last_updated_at)}` : "no updates yet"}
+              </div>
+            </div>
+            {stateMetrics ? (
+              <div className="metric-stack">
+                <div className="metric-row">
+                  <span>Total updates</span>
+                  <strong className="mono">{stateMetrics.total_updates}</strong>
+                </div>
+                {stateMetrics.by_source.map((entry) => (
+                  <div key={entry.source} className="metric-row">
+                    <span>{entry.source}</span>
+                    <strong className="mono">{entry.count}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="muted">No metrics loaded.</div>
+            )}
+          </section>
+
           <section className="panel">
             <div className="panel-head">
               <div>

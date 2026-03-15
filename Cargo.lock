@@ -5893,6 +5893,7 @@ dependencies = [
  "futures",
  "pa-core",
  "pa-memory",
+ "pa-state",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -5973,9 +5974,12 @@ name = "pa-state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
+ "pa-core",
  "serde",
  "serde_json",
+ "sysinfo",
  "tokio",
 ]
 

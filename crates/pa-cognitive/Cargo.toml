@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 pa-core = { path = "../pa-core" }
 pa-memory = { path = "../pa-memory" }
+pa-state = { path = "../pa-state" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
