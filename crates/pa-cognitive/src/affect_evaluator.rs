@@ -91,10 +91,15 @@ struct SocialDeltaReq {
 
 #[derive(Debug, Deserialize)]
 struct IllusionDeltaReq {
+    #[serde(alias = "delta_affinity")]
     expected_delta_affinity: f32,
+    #[serde(alias = "delta_attachment")]
     expected_delta_attachment: f32,
+    #[serde(alias = "delta_trust")]
     expected_delta_trust: f32,
+    #[serde(alias = "delta_safety")]
     expected_delta_safety: f32,
+    #[serde(alias = "delta_tension")]
     expected_delta_tension: f32,
 }
 
@@ -287,6 +292,10 @@ impl Worker for AffectEvaluatorWorker {
 		                            let em = self.embedder.clone();
 		                            
 	                            active_tasks.spawn(async move {
+	                                let _permit = match limiter.acquire_owned().await {
+	                                    Ok(permit) => permit,
+	                                    Err(_) => return,
+	                                };
 	                                Self::evaluate_turn(&h, &c, &sp, &pp, &g, st, &target_user, &message_id, history, &current_msg, e, em).await;
 	                            });
 	                        }
@@ -340,7 +349,6 @@ impl AffectEvaluatorWorker {
             &history,
             episodic.as_ref(),
             embedder.as_ref(),
-            graph,
             user_id,
             current_msg,
         ).await;
@@ -381,7 +389,13 @@ impl AffectEvaluatorWorker {
             composite_system_prompt.push_str(&mem);
             composite_system_prompt.push('\n');
         }
-        composite_system_prompt.push_str(&cognitive_context.social_text);
+        let memory_hint = (history.len() as f32 / 12.0).min(0.15);
+        let affect_social_context = crate::social_context::load_affect_social_context(
+            graph,
+            user_id,
+            memory_hint,
+        ).await;
+        composite_system_prompt.push_str(&affect_social_context.to_prompt_text());
 
         let user_prompt = render_prompt_or(
             "affect_evaluator.user_extract",
@@ -492,6 +506,15 @@ impl AffectEvaluatorWorker {
 
                     if let Err(e) = graph.update_social_graph(&social.target_user, s_delta).await {
                         error!("Failed to update social graph for {}: {}", social.target_user, e);
+                    }
+
+                    let projection_hint = if social.role == "chat_partner" || social.target_user == user_id {
+                        (history.len() as f32 / 12.0).min(0.15)
+                    } else {
+                        0.0
+                    };
+                    if let Err(e) = graph.project_social_tree(&social.target_user, projection_hint).await {
+                        warn!("Failed to project social tree for {}: {}", social.target_user, e);
                     }
 
                     if social.role == "chat_partner" || social.target_user == user_id {

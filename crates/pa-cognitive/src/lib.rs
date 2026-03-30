@@ -1,4 +1,5 @@
 pub mod context;
+pub mod social_context;
 pub mod dialogue_engine;
 pub mod affect_evaluator;
 

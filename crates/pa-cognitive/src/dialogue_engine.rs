@@ -552,7 +552,126 @@ impl Worker for DialogueEngineWorker {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SocialFetchDecision {
+    should_fetch: bool,
+    score: u8,
+    has_strong_social_cue: bool,
+    has_continuity_cue: bool,
+    recent_social_signal: bool,
+    short_follow_up: bool,
+}
+
 impl DialogueEngineWorker {
+    fn contains_any(text: &str, cues: &[&str]) -> bool {
+        cues.iter().any(|cue| text.contains(cue))
+    }
+
+    fn social_fetch_decision(
+        raw_event: &pa_core::event::RawEvent,
+        history: &[(String, String, String)],
+    ) -> SocialFetchDecision {
+        if history.is_empty() {
+            return SocialFetchDecision {
+                should_fetch: false,
+                score: 0,
+                has_strong_social_cue: false,
+                has_continuity_cue: false,
+                recent_social_signal: false,
+                short_follow_up: false,
+            };
+        }
+
+        let lowered = raw_event.content.to_lowercase();
+        let short_follow_up = lowered.trim().chars().count() <= 28;
+
+        const STRONG_SOCIAL_CUES: &[&str] = &[
+            "xin lỗi",
+            "sorry",
+            "giận",
+            "tin tưởng",
+            "trust",
+            "ghét",
+            "hate",
+            "yêu",
+            "love",
+            "nhớ",
+            "miss",
+            "buồn",
+            "sad",
+            "căng",
+            "tension",
+            "đừng",
+            "đừng có",
+            "stop",
+            "khó chịu",
+            "hurt",
+            "thất vọng",
+            "disappoint",
+            "tha thứ",
+            "forgive",
+            "quan hệ",
+            "mối quan hệ",
+            "cách m nghĩ về t",
+            "cách mày nghĩ về tao",
+        ];
+
+        const CONTINUITY_CUES: &[&str] = &[
+            "hôm qua",
+            "lúc nãy",
+            "vừa nãy",
+            "nãy",
+            "ban nãy",
+            "như t nói",
+            "như tao nói",
+            "như m nói",
+            "như mày nói",
+            "again",
+            "still",
+            "as i said",
+            "as you said",
+        ];
+
+        let has_strong_social_cue = Self::contains_any(&lowered, STRONG_SOCIAL_CUES);
+        let has_continuity_cue = Self::contains_any(&lowered, CONTINUITY_CUES);
+
+        let recent_social_signal = history
+            .iter()
+            .rev()
+            .take(4)
+            .any(|(_, _, content)| {
+                let recent = content.to_lowercase();
+                Self::contains_any(&recent, STRONG_SOCIAL_CUES)
+                    || Self::contains_any(&recent, CONTINUITY_CUES)
+            });
+
+        let mut score = 0_u8;
+        if has_strong_social_cue {
+            score += 3;
+        }
+        if has_continuity_cue {
+            score += 2;
+        }
+        if recent_social_signal {
+            score += 2;
+        }
+        if short_follow_up && recent_social_signal {
+            score += 1;
+        }
+        if raw_event.is_dm && (has_continuity_cue || recent_social_signal) {
+            score += 1;
+        }
+
+        SocialFetchDecision {
+            should_fetch: score >= 3,
+            score,
+            has_strong_social_cue,
+            has_continuity_cue,
+            recent_social_signal,
+            short_follow_up,
+        }
+    }
+
     async fn call_dialogue_engine(
         http_client: &reqwest::Client,
         config: &DialogueEngineConfig,
@@ -560,7 +679,7 @@ impl DialogueEngineWorker {
         history: Vec<(String, String, String)>,
         episodic: Arc<EpisodicStore>,
         embedder: Arc<MemoryEmbedder>,
-        graph: CognitiveGraph,
+        _graph: CognitiveGraph,
         state_store: Option<StateStore>,
         state_prompt: StatePromptConfig,
         current_username: &str,
@@ -572,37 +691,87 @@ impl DialogueEngineWorker {
             config.api_base.trim_end_matches('/')
         );
 
-        let mut messages = vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-                name: None,
-            },
-        ];
+        let mut system_blocks: Vec<String> = vec![system_prompt.to_string()];
+
+        let mut messages: Vec<ChatMessage> = Vec::new();
 
         let cognitive_context = crate::context::build_shared_cognitive_context(
             &raw_event.message_id,
             &history,
             Some(&episodic),
             Some(&embedder),
-            &graph,
             current_username,
             &raw_event.content,
         ).await;
 
         if let Some(memory_text) = cognitive_context.memory_text {
-            messages.push(ChatMessage {
-                role: "system".to_string(),
-                content: memory_text,
-                name: None,
-            });
+            system_blocks.push(memory_text);
         }
 
-        messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: cognitive_context.social_text,
-            name: None,
-        });
+        let mut social_mode = "none";
+
+        if let Some(dialogue_social_text) = cognitive_context.dialogue_social_text {
+            social_mode = "full";
+            debug!(
+                kind = "prompt.social",
+                user = %current_username,
+                mode = social_mode,
+                reason = "explicit_dialogue_social_text",
+                "Dialogue social context injected"
+            );
+            system_blocks.push(dialogue_social_text);
+        } else {
+            let decision = Self::social_fetch_decision(raw_event, &history);
+            debug!(
+                kind = "prompt.social",
+                user = %current_username,
+                mode = social_mode,
+                should_fetch_social = decision.should_fetch,
+                score = decision.score,
+                has_strong_social_cue = decision.has_strong_social_cue,
+                has_continuity_cue = decision.has_continuity_cue,
+                recent_social_signal = decision.recent_social_signal,
+                short_follow_up = decision.short_follow_up,
+                history_len = history.len(),
+                is_dm = raw_event.is_dm,
+                "Dialogue social context decision"
+            );
+            if decision.should_fetch {
+                if let Some(summary) = crate::social_context::load_dialogue_social_summary(
+                    &_graph,
+                    current_username,
+                    (history.len() as f32 / 12.0).min(0.15),
+                ).await {
+                    social_mode = "summary";
+                    debug!(
+                        kind = "prompt.social",
+                        user = %summary.user_id,
+                        mode = social_mode,
+                        familiarity = summary.familiarity,
+                        trust = summary.trust_state,
+                        tension = summary.tension_state,
+                        "Injected dialogue social summary context"
+                    );
+                    system_blocks.push(summary.summary);
+                } else {
+                    debug!(
+                        kind = "prompt.social",
+                        user = %current_username,
+                        mode = social_mode,
+                        "Dialogue social summary fetch returned none"
+                    );
+                }
+            }
+        }
+
+        debug!(
+            kind = "prompt.social",
+            user = %current_username,
+            mode = social_mode,
+            system_block_count = system_blocks.len(),
+            "Dialogue prompt system context assembled"
+        );
+
 
         if let Some(store) = state_store {
             let rows = store.rows().await;
@@ -614,28 +783,36 @@ impl DialogueEngineWorker {
                         &[],
                         "[STATE INTERPRETATION]\nRanges vary by dimension. Most are 0..1; some are -1..1 (negative to positive).\nUse states as soft signals to shape tone, effort, and prioritization; do not mention them explicitly.\n\nsession_social: affinity/attachment/trust/safety are -1..1 (negative to positive); tension is 0..1 (higher = more friction).\nemotion: valence is -1..1; arousal/joy/sadness/anger/anxiety/confidence/stability are 0..1 (higher = stronger).\nsystem: energy (capacity), fatigue (strain), responsiveness (readiness).\npreference: curiosity/stress/depth/brevity/directness/empathy_bias/risk_tolerance are 0..1; fascination is -1..1 (negative to positive interest).\nstyle: warmth/playfulness/formality/brevity control response tone.\ncognition (derived): clarity/focus/coherence/creativity/decisiveness/consistency, higher = stronger.\nrisk (derived): safety/privacy/escalation risk, higher = higher risk -> be more cautious.\nuser: engagement/familiarity are 0..1; trust/reliability/boundary_respect/sentiment are -1..1.\ngoal: focus/commitment/clarity/urgency/constraint_pressure/satisfaction/progress, higher = stronger.\nenvironment: load/noise/time_pressure higher = more friction; channel_quality higher = better conditions.\n",
                     );
-                    messages.push(ChatMessage {
-                        role: "system".to_string(),
-                        content: legend_text,
-                        name: None,
-                    });
+                    system_blocks.push(legend_text);
                 }
                 let state_text = pa_core::prompt_registry::render_prompt_or(
                     "context.state.snapshot",
                     &[("state_lines", snapshot.as_str())],
                     "### INTERNAL STATE SNAPSHOT\n{{state_lines}}\n",
                 );
-                messages.push(ChatMessage {
-                    role: "system".to_string(),
-                    content: state_text,
-                    name: None,
-                });
+                system_blocks.push(state_text);
             }
         }
 
+        system_blocks.push(cognitive_context.time_and_history_text);
+
+        let merged_system_prompt = system_blocks
+            .into_iter()
+            .filter(|block| !block.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        debug!(
+            kind = "prompt.social",
+            user = %current_username,
+            mode = social_mode,
+            merged_system_prompt_len = merged_system_prompt.len(),
+            "Dialogue merged system prompt ready"
+        );
+
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: cognitive_context.time_and_history_text,
+            content: merged_system_prompt,
             name: None,
         });
 
