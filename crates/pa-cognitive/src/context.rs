@@ -7,7 +7,6 @@ use pa_core::prompt_registry::render_prompt_or;
 use pa_memory::{
     episodic::EpisodicStore,
     embedder::MemoryEmbedder,
-    graph::CognitiveGraph,
 };
 use tokio::sync::Mutex;
 
@@ -25,7 +24,7 @@ pub struct SharedContextTiming {
 #[derive(Clone)]
 pub struct SharedCognitiveContext {
     pub memory_text: Option<String>,
-    pub social_text: String,
+    pub dialogue_social_text: Option<String>,
     pub time_and_history_text: String,
     pub timing: SharedContextTiming,
 }
@@ -65,7 +64,6 @@ pub async fn build_shared_cognitive_context(
     history: &[(String, String, String)],
     episodic: Option<&Arc<EpisodicStore>>,
     embedder: Option<&Arc<MemoryEmbedder>>,
-    graph: &CognitiveGraph,
     current_username: &str,
     new_message: &str,
 ) -> SharedCognitiveContext {
@@ -94,7 +92,6 @@ pub async fn build_shared_cognitive_context(
         history,
         episodic,
         embedder,
-        graph,
         current_username,
         new_message,
     )
@@ -114,7 +111,6 @@ async fn build_shared_cognitive_context_uncached(
     history: &[(String, String, String)],
     episodic: Option<&Arc<EpisodicStore>>,
     embedder: Option<&Arc<MemoryEmbedder>>,
-    graph: &CognitiveGraph,
     current_username: &str,
     new_message: &str,
 ) -> SharedCognitiveContext {
@@ -171,53 +167,6 @@ async fn build_shared_cognitive_context_uncached(
     let chunk_count_started = Instant::now();
     let lancedb_count = cached_user_chunk_count(episodic, current_username).await;
     timing.chunk_count_ms = chunk_count_started.elapsed().as_millis();
-    let memory_hint = (lancedb_count as f32 / 200.0).min(0.15);
-
-    let graph_started = Instant::now();
-    let social_text = if let Ok((attitudes, illusion)) = graph.get_social_context(current_username).await {
-        timing.graph_ms = graph_started.elapsed().as_millis();
-        let graph_depth = (attitudes.affinity.abs() + attitudes.attachment.abs()
-            + attitudes.trust.abs() + attitudes.safety.abs()) / 4.0;
-        let context_depth = (graph_depth + memory_hint).min(1.0);
-        let affinity = format!("{:.6}", attitudes.affinity);
-        let attachment = format!("{:.6}", attitudes.attachment);
-        let trust = format!("{:.6}", attitudes.trust);
-        let safety = format!("{:.6}", attitudes.safety);
-        let tension = format!("{:.6}", attitudes.tension);
-        let depth = format!("{:.6}", context_depth);
-        let ill_affinity = format!("{:.6}", illusion.affinity);
-        let ill_attachment = format!("{:.6}", illusion.attachment);
-        let ill_trust = format!("{:.6}", illusion.trust);
-        let ill_safety = format!("{:.6}", illusion.safety);
-        let ill_tension = format!("{:.6}", illusion.tension);
-
-        render_prompt_or(
-            "context.social.known",
-            &[
-                ("username", current_username),
-                ("affinity", affinity.as_str()),
-                ("attachment", attachment.as_str()),
-                ("trust", trust.as_str()),
-                ("safety", safety.as_str()),
-                ("tension", tension.as_str()),
-                ("context_depth", depth.as_str()),
-                ("ill_affinity", ill_affinity.as_str()),
-                ("ill_attachment", ill_attachment.as_str()),
-                ("ill_trust", ill_trust.as_str()),
-                ("ill_safety", ill_safety.as_str()),
-                ("ill_tension", ill_tension.as_str()),
-            ],
-            "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: {{affinity}}\nAttachment: {{attachment}}\nTrust: {{trust}}\nSafety: {{safety}}\nTension: {{tension}}\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: {{ill_affinity}}, Attachment: {{ill_attachment}}, Trust: {{ill_trust}}, Safety: {{ill_safety}}, Tension: {{ill_tension}}\n",
-        )
-    } else {
-        timing.graph_ms = graph_started.elapsed().as_millis();
-        let depth = format!("{:.6}", memory_hint);
-        render_prompt_or(
-            "context.social.default",
-            &[("username", current_username), ("context_depth", depth.as_str())],
-            "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: 0.000000\nAttachment: 0.000000\nTrust: 0.000000\nSafety: 0.000000\nTension: 0.000000\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: 0.000000, Attachment: 0.000000, Trust: 0.000000, Safety: 0.000000, Tension: 0.000000\n",
-        )
-    };
 
     let format_started = Instant::now();
     let profile = get_agent_profile();
@@ -275,7 +224,7 @@ async fn build_shared_cognitive_context_uncached(
 
     SharedCognitiveContext {
         memory_text,
-        social_text,
+        dialogue_social_text: None,
         time_and_history_text,
         timing,
     }

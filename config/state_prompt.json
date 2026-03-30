@@ -7,17 +7,11 @@
       "session_social",
       "emotion",
       "system",
-      "preference",
-      "style",
-      "cognition",
-      "risk",
-      "user",
-      "goal",
       "environment"
     ]
   },
   "legend": {
-    "enabled": true,
+    "enabled": false,
     "prompt": "context.state.legend"
   }
 }
