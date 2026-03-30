@@ -11,11 +11,23 @@ use pa_memory::{
 };
 use tokio::sync::Mutex;
 
+#[derive(Clone, Default)]
+pub struct SharedContextTiming {
+    pub total_ms: u128,
+    pub embed_ms: u128,
+    pub episodic_search_ms: u128,
+    pub chunk_count_ms: u128,
+    pub graph_ms: u128,
+    pub format_ms: u128,
+    pub cache_hit: bool,
+}
+
 #[derive(Clone)]
 pub struct SharedCognitiveContext {
     pub memory_text: Option<String>,
     pub social_text: String,
     pub time_and_history_text: String,
+    pub timing: SharedContextTiming,
 }
 
 #[derive(Clone)]
@@ -57,6 +69,7 @@ pub async fn build_shared_cognitive_context(
     current_username: &str,
     new_message: &str,
 ) -> SharedCognitiveContext {
+    let overall_started = Instant::now();
     let slot = {
         let mut cache = shared_context_cache().lock().await;
         if cache.len() > MAX_SHARED_CONTEXT_CACHE {
@@ -70,11 +83,14 @@ pub async fn build_shared_cognitive_context(
     let mut cached = slot.lock().await;
     if let Some(entry) = cached.as_ref() {
         if entry.cached_at.elapsed() < SHARED_CONTEXT_TTL {
-            return entry.value.clone();
+            let mut value = entry.value.clone();
+            value.timing.cache_hit = true;
+            value.timing.total_ms = overall_started.elapsed().as_millis();
+            return value;
         }
     }
 
-    let computed = build_shared_cognitive_context_uncached(
+    let mut computed = build_shared_cognitive_context_uncached(
         history,
         episodic,
         embedder,
@@ -83,6 +99,8 @@ pub async fn build_shared_cognitive_context(
         new_message,
     )
     .await;
+
+    computed.timing.total_ms = overall_started.elapsed().as_millis();
 
     *cached = Some(CachedSharedContext {
         cached_at: Instant::now(),
@@ -100,6 +118,8 @@ async fn build_shared_cognitive_context_uncached(
     current_username: &str,
     new_message: &str,
 ) -> SharedCognitiveContext {
+    let mut timing = SharedContextTiming::default();
+
     let mut memory_text = None;
     if let (Some(ep), Some(emb)) = (episodic, embedder) {
         let recent_context = history.iter()
@@ -108,15 +128,20 @@ async fn build_shared_cognitive_context_uncached(
             .map(|(_, _, content)| content.as_str())
             .collect::<Vec<_>>()
             .join(" | ");
-        
+
         let search_query = if recent_context.is_empty() {
             new_message.to_string()
         } else {
             format!("{} | {}", recent_context, new_message)
         };
 
+        let embed_started = Instant::now();
         if let Ok(query_vec) = emb.embed_single(search_query).await {
+            timing.embed_ms = embed_started.elapsed().as_millis();
+
+            let search_started = Instant::now();
             if let Ok(events) = ep.search(&query_vec, 3, 0.5).await {
+                timing.episodic_search_ms = search_started.elapsed().as_millis();
                 if !events.is_empty() {
                     let mut text = render_prompt_or(
                         "context.memory.header",
@@ -135,17 +160,23 @@ async fn build_shared_cognitive_context_uncached(
                     }
                     memory_text = Some(text);
                 }
+            } else {
+                timing.episodic_search_ms = search_started.elapsed().as_millis();
             }
+        } else {
+            timing.embed_ms = embed_started.elapsed().as_millis();
         }
     }
 
+    let chunk_count_started = Instant::now();
     let lancedb_count = cached_user_chunk_count(episodic, current_username).await;
+    timing.chunk_count_ms = chunk_count_started.elapsed().as_millis();
     let memory_hint = (lancedb_count as f32 / 200.0).min(0.15);
 
-    let social_text;
-
-    if let Ok((attitudes, illusion)) = graph.get_social_context(current_username).await {
-        let graph_depth = (attitudes.affinity.abs() + attitudes.attachment.abs() 
+    let graph_started = Instant::now();
+    let social_text = if let Ok((attitudes, illusion)) = graph.get_social_context(current_username).await {
+        timing.graph_ms = graph_started.elapsed().as_millis();
+        let graph_depth = (attitudes.affinity.abs() + attitudes.attachment.abs()
             + attitudes.trust.abs() + attitudes.safety.abs()) / 4.0;
         let context_depth = (graph_depth + memory_hint).min(1.0);
         let affinity = format!("{:.6}", attitudes.affinity);
@@ -160,7 +191,7 @@ async fn build_shared_cognitive_context_uncached(
         let ill_safety = format!("{:.6}", illusion.safety);
         let ill_tension = format!("{:.6}", illusion.tension);
 
-        social_text = render_prompt_or(
+        render_prompt_or(
             "context.social.known",
             &[
                 ("username", current_username),
@@ -177,16 +208,18 @@ async fn build_shared_cognitive_context_uncached(
                 ("ill_tension", ill_tension.as_str()),
             ],
             "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: {{affinity}}\nAttachment: {{attachment}}\nTrust: {{trust}}\nSafety: {{safety}}\nTension: {{tension}}\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: {{ill_affinity}}, Attachment: {{ill_attachment}}, Trust: {{ill_trust}}, Safety: {{ill_safety}}, Tension: {{ill_tension}}\n",
-        );
+        )
     } else {
+        timing.graph_ms = graph_started.elapsed().as_millis();
         let depth = format!("{:.6}", memory_hint);
-        social_text = render_prompt_or(
+        render_prompt_or(
             "context.social.default",
             &[("username", current_username), ("context_depth", depth.as_str())],
             "### EMOTIONAL AND RELATION STATE WITH {{username}}:\nAffinity: 0.000000\nAttachment: 0.000000\nTrust: 0.000000\nSafety: 0.000000\nTension: 0.000000\nContext Depth: {{context_depth}}\nAssumed perception -> Affinity: 0.000000, Attachment: 0.000000, Trust: 0.000000, Safety: 0.000000, Tension: 0.000000\n",
-        );
-    }
+        )
+    };
 
+    let format_started = Instant::now();
     let profile = get_agent_profile();
     let now = chrono::Utc::now();
     let agent_offset = chrono::FixedOffset::east_opt(profile.agent_timezone_offset_hours * 3600)
@@ -238,11 +271,13 @@ async fn build_shared_cognitive_context_uncached(
             "[context: there were {{history_len}} previous messages. participants: {{participants}}.]",
         ));
     }
+    timing.format_ms = format_started.elapsed().as_millis();
 
     SharedCognitiveContext {
         memory_text,
         social_text,
         time_and_history_text,
+        timing,
     }
 }
 

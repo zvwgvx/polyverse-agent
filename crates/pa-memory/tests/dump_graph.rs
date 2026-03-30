@@ -46,7 +46,7 @@ async fn test_full_roundtrip() -> Result<()> {
     assert!((att2.attachment - 0.15).abs() < 0.001, "Expected 0.15, got {}", att2.attachment);
     assert!((att2.trust - 0.10).abs() < 0.001, "Trust should stay at 0.10, got {}", att2.trust);
     
-    println!("\n✅ All assertions passed! Delta accumulation works!");
+    println!("\nAll assertions passed! Delta accumulation works!");
     
     graph
         .db

@@ -94,7 +94,6 @@ impl SemanticCompressor {
                 "effort": "minimal"
             },
             "provider": {
-                "order": ["Google AI Studio"],
                 "allow_fallbacks": true
             },
             "response_format": { "type": "json_object" }

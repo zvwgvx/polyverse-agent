@@ -44,6 +44,7 @@ struct WsOutgoingData {
     content: String,
     reply_to_message_id: Option<String>,
     is_typing: bool,
+    origin: String,
 }
 
 pub struct SelfbotWsWorker {
@@ -115,6 +116,7 @@ impl Worker for SelfbotWsWorker {
                                 content: response.content,
                                 reply_to_message_id: response.reply_to_message_id,
                                 is_typing: false,
+                                origin: "agent".to_string(),
                             };
 
                             let payload = WsOutgoingPayload {

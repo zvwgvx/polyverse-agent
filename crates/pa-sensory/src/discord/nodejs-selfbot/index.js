@@ -14,6 +14,21 @@ let ws = null;
 let wsConnected = false;
 let consecutiveConnectionFailures = 0;
 const MAX_FAILURES = 3;
+let outboundSendChain = Promise.resolve();
+const recentOutbound = new Map();
+const OUTBOUND_ECHO_TTL_MS = 15000;
+
+function rememberOutbound(channelId, content) {
+    const normalized = `${channelId}::${String(content || '').trim()}`;
+    recentOutbound.set(normalized, Date.now());
+    setTimeout(() => recentOutbound.delete(normalized), OUTBOUND_ECHO_TTL_MS).unref?.();
+}
+
+function isRecentOutboundEcho(channelId, content) {
+    const normalized = `${channelId}::${String(content || '').trim()}`;
+    const seenAt = recentOutbound.get(normalized);
+    return typeof seenAt === 'number' && (Date.now() - seenAt) <= OUTBOUND_ECHO_TTL_MS;
+}
 
 const client = new Client({
     checkUpdate: false,
@@ -32,31 +47,7 @@ function connectWebSocket() {
         try {
             const payload = JSON.parse(data);
             if (payload.type === 'response') {
-                const { channel_id, content, reply_to_message_id, is_typing } = payload.data;
-                const channel = await client.channels.fetch(channel_id).catch(() => null);
-
-                if (channel) {
-                    if (is_typing) {
-                        await channel.sendTyping();
-                        return;
-                    }
-
-                    if (reply_to_message_id && channel.type !== 'DM') {
-                        try {
-                            const message = await channel.messages.fetch(reply_to_message_id);
-                            await message.reply(content);
-                            console.log(`[Selfbot] Replied to ${reply_to_message_id} in ${channel_id}`);
-                        } catch (e) {
-                            console.error(`[Selfbot] Could not reply to ${reply_to_message_id}:`, e.message);
-                            await channel.send(content);
-                        }
-                    } else {
-                        await channel.send(content);
-                        console.log(`[Selfbot] Sent message to ${channel_id}`);
-                    }
-                } else {
-                    console.error(`[Selfbot] Unknown channel ID: ${channel_id}`);
-                }
+                enqueueOutgoingResponse(payload.data);
             }
         } catch (error) {
             console.error('[Selfbot] WS Message parsing failed:', error);
@@ -82,6 +73,44 @@ function connectWebSocket() {
     });
 }
 
+function enqueueOutgoingResponse(data) {
+    outboundSendChain = outboundSendChain
+        .catch(() => {})
+        .then(async () => {
+            const { channel_id, content, reply_to_message_id, is_typing } = data;
+            const channel = await client.channels.fetch(channel_id).catch(() => null);
+
+            if (!channel) {
+                console.error(`[Selfbot] Unknown channel ID: ${channel_id}`);
+                return;
+            }
+
+            if (is_typing) {
+                await channel.sendTyping();
+                return;
+            }
+
+            if (reply_to_message_id && channel.type !== 'DM') {
+                try {
+                    const message = await channel.messages.fetch(reply_to_message_id);
+                    const sent = await message.reply(content);
+                    rememberOutbound(channel_id, sent?.content ?? content);
+                    console.log(`[Selfbot] Replied to ${reply_to_message_id} in ${channel_id}`);
+                    return;
+                } catch (error) {
+                    console.error(`[Selfbot] Could not reply to ${reply_to_message_id}:`, error.message);
+                }
+            }
+
+            const sent = await channel.send(content);
+            rememberOutbound(channel_id, sent?.content ?? content);
+            console.log(`[Selfbot] Sent message to ${channel_id}`);
+        })
+        .catch((error) => {
+            console.error('[Selfbot] Failed to send queued response:', error.message);
+        });
+}
+
 client.on('ready', async () => {
     console.log(`[Selfbot] Connected to Discord as ${client.user.tag}`);
     connectWebSocket();
@@ -100,14 +129,27 @@ client.on('messageCreate', async (msg) => {
     }
 
     if (!wsConnected || ws.readyState !== WebSocket.OPEN) return;
+    if (isRecentOutboundEcho(msg.channelId, msg.content)) {
+        return;
+    }
 
     let isMention = false;
     let isDm = !msg.guildId;
+    let isReplyToSelf = false;
 
     const hasExplicitMention = msg.content.includes(`<@${client.user.id}>`) ||
         msg.content.includes(`<@!${client.user.id}>`);
 
-    if (hasExplicitMention || isDm) {
+    if (!isDm && msg.reference?.messageId) {
+        try {
+            const referenced = await msg.fetchReference();
+            isReplyToSelf = referenced?.author?.id === client.user.id;
+        } catch (error) {
+            console.warn(`[Selfbot] Failed to resolve reply reference for ${msg.id}: ${error.message}`);
+        }
+    }
+
+    if (hasExplicitMention || isDm || isReplyToSelf) {
         isMention = true;
     }
 

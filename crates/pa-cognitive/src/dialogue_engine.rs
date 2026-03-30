@@ -485,7 +485,7 @@ impl Worker for DialogueEngineWorker {
                             let emb = embedder.clone();
                             let g = graph.clone();
                             let st = state_store.clone();
-                            let sc = snapshot_config.clone();
+                            let sp = state_prompt.clone();
                             let tx = event_tx.clone();
                             let raw_clone = raw.clone();
                             let username = raw_clone.username.clone();
@@ -500,7 +500,7 @@ impl Worker for DialogueEngineWorker {
                                     emb.expect("Embedder not initialized").clone(),
                                     g.expect("Graph not initialized").clone(),
                                     st,
-                                    sc,
+                                    sp,
                                     &username,
                                     &raw_clone,
                                     &tx,
@@ -562,7 +562,7 @@ impl DialogueEngineWorker {
         embedder: Arc<MemoryEmbedder>,
         graph: CognitiveGraph,
         state_store: Option<StateStore>,
-        snapshot_config: StateSnapshotConfig,
+        state_prompt: StatePromptConfig,
         current_username: &str,
         raw_event: &pa_core::event::RawEvent,
         event_tx: &tokio::sync::mpsc::Sender<Event>,
@@ -662,7 +662,7 @@ impl DialogueEngineWorker {
             stream: Some(true),
             reasoning: config.reasoning.clone().map(|effort| ReasoningConfig { effort }),
             provider: Some(ProviderConfig {
-                order: Some(vec!["Google AI Studio".to_string()]),
+                order: None,
                 allow_fallbacks: true,
             }),
         };
@@ -679,11 +679,13 @@ impl DialogueEngineWorker {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            warn!(status = %status, api_error = %body, user = %raw_event.username, "Dialogue engine returned API error");
             if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
                 return Err(anyhow::anyhow!(
-                    "Dialogue engine API error ({}): {}",
+                    "Dialogue engine API error ({}): {} | body: {}",
                     status,
-                    api_err.error.message
+                    api_err.error.message,
+                    body
                 ));
             }
             return Err(anyhow::anyhow!("Dialogue engine API error ({}): {}", status, body));
@@ -743,18 +745,20 @@ impl DialogueEngineWorker {
                                             );
                                             full_response_buffer.push_str(&msg);
                                             full_response_buffer.push('\n');
-                                            let event = Event::Response(ResponseEvent {
-                                                platform: raw_event.platform,
-                                                channel_id: raw_event.channel_id.clone(),
-                                                reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
-                                                reply_to_user: Some(raw_event.username.clone()),
-                                                is_dm: raw_event.is_dm,
-                                                content: msg,
-                                                source: ResponseSource::CloudLLM,
-                                            });
-                                            is_first_chunk = false;
-                                            if let Err(e) = event_tx.send(event).await {
-                                                tracing::error!("Failed to send stream line event: {}", e);
+                                            if raw_event.platform != pa_core::event::Platform::DiscordSelfbot {
+                                                let event = Event::Response(ResponseEvent {
+                                                    platform: raw_event.platform,
+                                                    channel_id: raw_event.channel_id.clone(),
+                                                    reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
+                                                    reply_to_user: Some(raw_event.username.clone()),
+                                                    is_dm: raw_event.is_dm,
+                                                    content: msg,
+                                                    source: ResponseSource::CloudLLM,
+                                                });
+                                                is_first_chunk = false;
+                                                if let Err(e) = event_tx.send(event).await {
+                                                    tracing::error!("Failed to send stream line event: {}", e);
+                                                }
                                             }
                                         }
                                     }
@@ -774,21 +778,37 @@ impl DialogueEngineWorker {
                 "Dialogue engine stream emitted final line"
             );
             full_response_buffer.push_str(&final_msg);
-            let event = Event::Response(ResponseEvent {
-                platform: raw_event.platform,
-                channel_id: raw_event.channel_id.clone(),
-                reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
-                reply_to_user: Some(raw_event.username.clone()),
-                is_dm: raw_event.is_dm,
-                content: final_msg,
-                source: ResponseSource::CloudLLM,
-            });
-            if let Err(e) = event_tx.send(event).await {
-                tracing::error!("Failed to send stream final line event: {}", e);
+            if raw_event.platform != pa_core::event::Platform::DiscordSelfbot {
+                let event = Event::Response(ResponseEvent {
+                    platform: raw_event.platform,
+                    channel_id: raw_event.channel_id.clone(),
+                    reply_to_message_id: if is_first_chunk { Some(raw_event.message_id.clone()) } else { None },
+                    reply_to_user: Some(raw_event.username.clone()),
+                    is_dm: raw_event.is_dm,
+                    content: final_msg,
+                    source: ResponseSource::CloudLLM,
+                });
+                if let Err(e) = event_tx.send(event).await {
+                    tracing::error!("Failed to send stream final line event: {}", e);
+                }
             }
         }
 
         let full_response = full_response_buffer.trim().to_string();
+        if raw_event.platform == pa_core::event::Platform::DiscordSelfbot && !full_response.is_empty() {
+            let event = Event::Response(ResponseEvent {
+                platform: raw_event.platform,
+                channel_id: raw_event.channel_id.clone(),
+                reply_to_message_id: Some(raw_event.message_id.clone()),
+                reply_to_user: Some(raw_event.username.clone()),
+                is_dm: raw_event.is_dm,
+                content: full_response.clone(),
+                source: ResponseSource::CloudLLM,
+            });
+            if let Err(e) = event_tx.send(event).await {
+                tracing::error!("Failed to send selfbot final response event: {}", e);
+            }
+        }
         if !full_response.is_empty() {
             let event = Event::BotTurnCompletion(pa_core::event::BotTurnCompletion {
                 platform: raw_event.platform,

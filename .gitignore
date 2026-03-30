@@ -36,3 +36,5 @@ prompts/persona/base.txt
 
 # Private agent profile
 config/agent_profile.toml
+
+CLAUDE.md
