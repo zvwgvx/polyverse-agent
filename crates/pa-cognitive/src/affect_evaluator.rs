@@ -508,6 +508,15 @@ impl AffectEvaluatorWorker {
                         error!("Failed to update social graph for {}: {}", social.target_user, e);
                     }
 
+                    let projection_hint = if social.role == "chat_partner" || social.target_user == user_id {
+                        (history.len() as f32 / 12.0).min(0.15)
+                    } else {
+                        0.0
+                    };
+                    if let Err(e) = graph.project_social_tree(&social.target_user, projection_hint).await {
+                        warn!("Failed to project social tree for {}: {}", social.target_user, e);
+                    }
+
                     if social.role == "chat_partner" || social.target_user == user_id {
                         session_delta = Some(social.actual_perception_delta);
                     }

@@ -75,6 +75,62 @@ pub struct IllusionOf {
     pub tension: f32,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeRelationshipCore {
+    pub affinity: f32,
+    pub attachment: f32,
+    pub trust: f32,
+    pub safety: f32,
+    pub tension: f32,
+    pub familiarity: f32,
+    pub boundary_reliability: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeDynamicState {
+    pub tension_live: f32,
+    pub warmth_live: f32,
+    pub recent_shift: f32,
+    pub last_turn_impact: f32,
+    pub unresolved_friction_score: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeSelfOtherModel {
+    pub perceived_user_affinity: f32,
+    pub perceived_user_attachment: f32,
+    pub perceived_user_trust: f32,
+    pub perceived_user_safety: f32,
+    pub perceived_user_tension: f32,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeDerivedSummaries {
+    pub dialogue_summary_short: String,
+    pub familiarity_bucket: String,
+    pub trust_state: String,
+    pub tension_state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeMeta {
+    pub schema_version: String,
+    pub updated_at: String,
+    pub decay_policy: String,
+    pub writer_version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SocialTreeSnapshot {
+    pub user_id: String,
+    pub relationship_core: SocialTreeRelationshipCore,
+    pub dynamic_state: SocialTreeDynamicState,
+    pub self_other_model: SocialTreeSelfOtherModel,
+    pub derived_summaries: SocialTreeDerivedSummaries,
+    pub meta: SocialTreeMeta,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Entity {
     pub id: Option<String>,
@@ -186,7 +242,396 @@ impl EmotionDelta {
     }
 }
 
+fn clamp_unit(v: f32) -> f32 {
+    v.clamp(0.0, 1.0)
+}
+
+fn familiarity_bucket(context_depth: f32) -> &'static str {
+    if context_depth >= 0.66 {
+        "close"
+    } else if context_depth >= 0.25 {
+        "known"
+    } else {
+        "new"
+    }
+}
+
+fn trust_state(trust: f32) -> &'static str {
+    if trust >= 0.35 {
+        "stable"
+    } else if trust <= -0.20 {
+        "fragile"
+    } else {
+        "neutral"
+    }
+}
+
+fn tension_state(tension: f32) -> &'static str {
+    if tension >= 0.55 {
+        "high"
+    } else if tension >= 0.25 {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
 impl CognitiveGraph {
+    pub async fn project_social_tree(&self, user_id: &str, memory_hint: f32) -> Result<SocialTreeSnapshot> {
+        let safe_user_id = sanitize_component(user_id);
+        let att_edge_id = format!("{}_{}", self.agent_id, safe_user_id);
+        let ill_edge_id = format!("{}_{}", safe_user_id, self.agent_id);
+        let root_id = safe_user_id.clone();
+
+        let query = format!(
+            r#"
+            SELECT VALUE affinity FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE attachment FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE trust FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE safety FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE tension FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE affinity FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE attachment FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE trust FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE safety FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE tension FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE string::concat("", last_updated) FROM attitudes_towards:`{att}` LIMIT 1;
+            SELECT VALUE string::concat("", last_updated) FROM illusion_of:`{ill}` LIMIT 1;
+            SELECT VALUE string::concat("", meta.updated_at) FROM social_tree_root:`{root}` LIMIT 1;
+        "#,
+            att = att_edge_id,
+            ill = ill_edge_id,
+            root = root_id
+        );
+
+        let mut response = self.db.query(&query).await?;
+
+        fn extract_f32(response: &mut surrealdb::IndexedResults, idx: usize) -> f32 {
+            let val: Result<Vec<f64>, _> = response.take(idx);
+            match val {
+                Ok(v) => v.first().copied().unwrap_or(0.0) as f32,
+                Err(_) => 0.0,
+            }
+        }
+
+        fn extract_string(response: &mut surrealdb::IndexedResults, idx: usize) -> String {
+            response
+                .take::<Vec<String>>(idx)
+                .unwrap_or_default()
+                .first()
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn calc_decay(timestamp_str: &str) -> f32 {
+            if timestamp_str.is_empty() {
+                return 1.0;
+            }
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp_str) {
+                let elapsed = chrono::Utc::now().signed_duration_since(dt);
+                let days = elapsed.num_hours() as f64 / 24.0;
+                if days > 0.0 {
+                    return (0.99_f64).powf(days) as f32;
+                }
+            }
+            1.0
+        }
+
+        let raw_att = AttitudesTowards {
+            affinity: extract_f32(&mut response, 0),
+            attachment: extract_f32(&mut response, 1),
+            trust: extract_f32(&mut response, 2),
+            safety: extract_f32(&mut response, 3),
+            tension: extract_f32(&mut response, 4),
+        };
+
+        let raw_ill = IllusionOf {
+            affinity: extract_f32(&mut response, 5),
+            attachment: extract_f32(&mut response, 6),
+            trust: extract_f32(&mut response, 7),
+            safety: extract_f32(&mut response, 8),
+            tension: extract_f32(&mut response, 9),
+        };
+
+        let att_ts = extract_string(&mut response, 10);
+        let ill_ts = extract_string(&mut response, 11);
+        let existing_updated_at = extract_string(&mut response, 12);
+        let att_decay = calc_decay(&att_ts);
+        let ill_decay = calc_decay(&ill_ts);
+
+        let attitudes = AttitudesTowards {
+            affinity: raw_att.affinity * att_decay,
+            attachment: raw_att.attachment * att_decay,
+            trust: raw_att.trust * att_decay,
+            safety: raw_att.safety * att_decay,
+            tension: raw_att.tension * att_decay,
+        };
+
+        let illusion = IllusionOf {
+            affinity: raw_ill.affinity * ill_decay,
+            attachment: raw_ill.attachment * ill_decay,
+            trust: raw_ill.trust * ill_decay,
+            safety: raw_ill.safety * ill_decay,
+            tension: raw_ill.tension * ill_decay,
+        };
+
+        let graph_depth = (
+            attitudes.affinity.abs()
+                + attitudes.attachment.abs()
+                + attitudes.trust.abs()
+                + attitudes.safety.abs()
+        ) / 4.0;
+        let context_depth = clamp_unit(graph_depth + memory_hint.min(1.0));
+
+        let familiarity = familiarity_bucket(context_depth);
+        let trust = trust_state(attitudes.trust);
+        let tension = tension_state(attitudes.tension);
+
+        let snapshot = SocialTreeSnapshot {
+            user_id: user_id.to_string(),
+            relationship_core: SocialTreeRelationshipCore {
+                affinity: attitudes.affinity,
+                attachment: attitudes.attachment,
+                trust: attitudes.trust,
+                safety: attitudes.safety,
+                tension: attitudes.tension,
+                familiarity: context_depth,
+                boundary_reliability: attitudes.safety,
+            },
+            dynamic_state: SocialTreeDynamicState {
+                tension_live: clamp_unit((attitudes.tension + 1.0) / 2.0),
+                warmth_live: clamp_unit((attitudes.affinity + attitudes.safety + 2.0) / 4.0),
+                recent_shift: 0.0,
+                last_turn_impact: 0.0,
+                unresolved_friction_score: clamp_unit((attitudes.tension + 1.0) / 2.0),
+            },
+            self_other_model: SocialTreeSelfOtherModel {
+                perceived_user_affinity: illusion.affinity,
+                perceived_user_attachment: illusion.attachment,
+                perceived_user_trust: illusion.trust,
+                perceived_user_safety: illusion.safety,
+                perceived_user_tension: illusion.tension,
+                confidence: context_depth,
+            },
+            derived_summaries: SocialTreeDerivedSummaries {
+                dialogue_summary_short: format!(
+                    "[social summary] user={} familiarity={} trust={} tension={}.",
+                    user_id, familiarity, trust, tension
+                ),
+                familiarity_bucket: familiarity.to_string(),
+                trust_state: trust.to_string(),
+                tension_state: tension.to_string(),
+            },
+            meta: SocialTreeMeta {
+                schema_version: "v1".to_string(),
+                updated_at: existing_updated_at,
+                decay_policy: "graph_decay_0.99_per_day".to_string(),
+                writer_version: "graph_projection_v1".to_string(),
+            },
+        };
+
+        let upsert_query = format!(
+            r#"
+            UPSERT social_tree_root:`{root}` CONTENT {{
+                user_id: $user_id,
+                relationship_core: {{
+                    affinity: $rc_affinity,
+                    attachment: $rc_attachment,
+                    trust: $rc_trust,
+                    safety: $rc_safety,
+                    tension: $rc_tension,
+                    familiarity: $rc_familiarity,
+                    boundary_reliability: $rc_boundary_reliability
+                }},
+                dynamic_state: {{
+                    tension_live: $ds_tension_live,
+                    warmth_live: $ds_warmth_live,
+                    recent_shift: $ds_recent_shift,
+                    last_turn_impact: $ds_last_turn_impact,
+                    unresolved_friction_score: $ds_unresolved_friction_score
+                }},
+                self_other_model: {{
+                    perceived_user_affinity: $so_perceived_user_affinity,
+                    perceived_user_attachment: $so_perceived_user_attachment,
+                    perceived_user_trust: $so_perceived_user_trust,
+                    perceived_user_safety: $so_perceived_user_safety,
+                    perceived_user_tension: $so_perceived_user_tension,
+                    confidence: $so_confidence
+                }},
+                derived_summaries: {{
+                    dialogue_summary_short: $dsm_dialogue_summary_short,
+                    familiarity_bucket: $dsm_familiarity_bucket,
+                    trust_state: $dsm_trust_state,
+                    tension_state: $dsm_tension_state
+                }},
+                meta: {{
+                    schema_version: "v1",
+                    updated_at: time::now(),
+                    decay_policy: "graph_decay_0.99_per_day",
+                    writer_version: "graph_projection_v1"
+                }}
+            }};
+        "#,
+            root = root_id
+        );
+
+        self.db
+            .query(&upsert_query)
+            .bind(("user_id", user_id.to_string()))
+            .bind(("rc_affinity", snapshot.relationship_core.affinity))
+            .bind(("rc_attachment", snapshot.relationship_core.attachment))
+            .bind(("rc_trust", snapshot.relationship_core.trust))
+            .bind(("rc_safety", snapshot.relationship_core.safety))
+            .bind(("rc_tension", snapshot.relationship_core.tension))
+            .bind(("rc_familiarity", snapshot.relationship_core.familiarity))
+            .bind((
+                "rc_boundary_reliability",
+                snapshot.relationship_core.boundary_reliability,
+            ))
+            .bind(("ds_tension_live", snapshot.dynamic_state.tension_live))
+            .bind(("ds_warmth_live", snapshot.dynamic_state.warmth_live))
+            .bind(("ds_recent_shift", snapshot.dynamic_state.recent_shift))
+            .bind(("ds_last_turn_impact", snapshot.dynamic_state.last_turn_impact))
+            .bind((
+                "ds_unresolved_friction_score",
+                snapshot.dynamic_state.unresolved_friction_score,
+            ))
+            .bind((
+                "so_perceived_user_affinity",
+                snapshot.self_other_model.perceived_user_affinity,
+            ))
+            .bind((
+                "so_perceived_user_attachment",
+                snapshot.self_other_model.perceived_user_attachment,
+            ))
+            .bind((
+                "so_perceived_user_trust",
+                snapshot.self_other_model.perceived_user_trust,
+            ))
+            .bind((
+                "so_perceived_user_safety",
+                snapshot.self_other_model.perceived_user_safety,
+            ))
+            .bind((
+                "so_perceived_user_tension",
+                snapshot.self_other_model.perceived_user_tension,
+            ))
+            .bind(("so_confidence", snapshot.self_other_model.confidence))
+            .bind((
+                "dsm_dialogue_summary_short",
+                snapshot.derived_summaries.dialogue_summary_short.clone(),
+            ))
+            .bind((
+                "dsm_familiarity_bucket",
+                snapshot.derived_summaries.familiarity_bucket.clone(),
+            ))
+            .bind((
+                "dsm_trust_state",
+                snapshot.derived_summaries.trust_state.clone(),
+            ))
+            .bind((
+                "dsm_tension_state",
+                snapshot.derived_summaries.tension_state.clone(),
+            ))
+            .await
+            .context("Failed to UPSERT social tree root")?;
+
+        let mut returned = snapshot;
+        returned.meta.updated_at = chrono::Utc::now().to_rfc3339();
+        Ok(returned)
+    }
+
+    pub async fn get_social_tree_snapshot(&self, user_id: &str) -> Result<SocialTreeSnapshot> {
+        let query = r#"
+            SELECT user_id, relationship_core, dynamic_state, self_other_model, derived_summaries, meta
+            FROM social_tree_root
+            WHERE user_id = $user_id
+            LIMIT 1;
+        "#;
+
+        let mut response = self
+            .db
+            .query(query)
+            .bind(("user_id", user_id.to_string()))
+            .await?;
+        let rows: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
+
+        if let Some(raw) = rows.into_iter().next() {
+            let user_id = raw
+                .get("user_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| user_id.to_string());
+
+            let relationship_core = raw
+                .get("relationship_core")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<SocialTreeRelationshipCore>(v).ok())
+                .unwrap_or_default();
+
+            let dynamic_state = raw
+                .get("dynamic_state")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<SocialTreeDynamicState>(v).ok())
+                .unwrap_or_default();
+
+            let self_other_model = raw
+                .get("self_other_model")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<SocialTreeSelfOtherModel>(v).ok())
+                .unwrap_or_default();
+
+            let derived_summaries = raw
+                .get("derived_summaries")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<SocialTreeDerivedSummaries>(v).ok())
+                .unwrap_or_default();
+
+            let meta = raw
+                .get("meta")
+                .cloned()
+                .and_then(|v| serde_json::from_value::<SocialTreeMeta>(v).ok())
+                .unwrap_or_default();
+
+            let mut snapshot = SocialTreeSnapshot {
+                user_id,
+                relationship_core,
+                dynamic_state,
+                self_other_model,
+                derived_summaries,
+                meta,
+            };
+
+            if snapshot.meta.schema_version.is_empty() {
+                snapshot.meta.schema_version = "v1".to_string();
+            }
+            if snapshot.meta.updated_at.is_empty() {
+                snapshot.meta.updated_at = chrono::Utc::now().to_rfc3339();
+            }
+            if snapshot.meta.decay_policy.is_empty() {
+                snapshot.meta.decay_policy = "graph_decay_0.99_per_day".to_string();
+            }
+            if snapshot.meta.writer_version.is_empty() {
+                snapshot.meta.writer_version = "graph_projection_v1".to_string();
+            }
+
+            return Ok(snapshot);
+        }
+
+        anyhow::bail!("social tree root not found")
+    }
+
+    pub async fn get_or_project_social_tree_snapshot(
+        &self,
+        user_id: &str,
+        memory_hint: f32,
+    ) -> Result<SocialTreeSnapshot> {
+        match self.get_social_tree_snapshot(user_id).await {
+            Ok(snapshot) => Ok(snapshot),
+            Err(_) => self.project_social_tree(user_id, memory_hint).await,
+        }
+    }
+
     pub async fn update_social_graph(&self, user_id: &str, delta: SocialDelta) -> Result<()> {
         let delta = delta.clamped();
         let safe_user_id = sanitize_component(user_id);
@@ -608,6 +1053,60 @@ mod tests {
         println!("Accumulated Attitudes: {:#?}", attitudes2);
 
         assert!(attitudes2.affinity > 0.0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_social_tree_projection_and_readback() -> Result<()> {
+        let graph = CognitiveGraph::new("memory").await?;
+
+        graph
+            .db
+            .query("DELETE person; DELETE attitudes_towards; DELETE illusion_of; DELETE social_tree_root;")
+            .await
+            .unwrap();
+
+        graph
+            .update_social_graph(
+                "alice",
+                SocialDelta {
+                    delta_affinity: 0.4,
+                    delta_attachment: 0.2,
+                    delta_trust: -0.1,
+                    delta_safety: 0.15,
+                    delta_tension: 0.3,
+                },
+            )
+            .await?;
+
+        graph
+            .update_illusion_graph(
+                "alice",
+                SocialDelta {
+                    delta_affinity: 0.1,
+                    delta_attachment: 0.05,
+                    delta_trust: -0.05,
+                    delta_safety: 0.1,
+                    delta_tension: 0.2,
+                },
+            )
+            .await?;
+
+        let projected = graph.project_social_tree("alice", 0.12).await?;
+        assert_eq!(projected.user_id, "alice");
+        assert!(projected.relationship_core.affinity > 0.0);
+        assert!(projected.relationship_core.familiarity >= 0.12);
+        assert!(!projected.derived_summaries.dialogue_summary_short.is_empty());
+
+        let readback = graph
+            .get_or_project_social_tree_snapshot("alice", 0.12)
+            .await?;
+        assert_eq!(readback.user_id, "alice");
+        assert_eq!(readback.meta.schema_version, "v1");
+        assert_eq!(
+            readback.derived_summaries.familiarity_bucket,
+            projected.derived_summaries.familiarity_bucket
+        );
         Ok(())
     }
 }

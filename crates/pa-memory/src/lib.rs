@@ -7,6 +7,7 @@ pub mod embedder;
 pub mod compressor;
 pub mod graph;
 
+pub use graph::SocialTreeSnapshot;
 pub use short_term::ShortTermMemory;
 pub use store::MemoryStore;
 pub use types::{ConversationKey, MemoryMessage};

@@ -1,5 +1,5 @@
 use pa_core::prompt_registry::render_prompt_or;
-use pa_memory::graph::{AttitudesTowards, CognitiveGraph, IllusionOf};
+use pa_memory::graph::{AttitudesTowards, CognitiveGraph, IllusionOf, SocialTreeSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct SocialCoreMetrics {
@@ -88,9 +88,17 @@ pub async fn load_affect_social_context(
     current_username: &str,
     memory_hint: f32,
 ) -> AffectSocialContext {
-    match graph.get_social_context(current_username).await {
-        Ok((attitudes, illusion)) => build_known_affect_context(current_username, &attitudes, &illusion, memory_hint),
-        Err(_) => build_default_affect_context(current_username, memory_hint),
+    match graph
+        .get_or_project_social_tree_snapshot(current_username, memory_hint)
+        .await
+    {
+        Ok(snapshot) => build_affect_context_from_tree(current_username, &snapshot, memory_hint),
+        Err(_) => match graph.get_social_context(current_username).await {
+            Ok((attitudes, illusion)) => {
+                build_known_affect_context(current_username, &attitudes, &illusion, memory_hint)
+            }
+            Err(_) => build_default_affect_context(current_username, memory_hint),
+        },
     }
 }
 
@@ -99,6 +107,13 @@ pub async fn load_dialogue_social_summary(
     current_username: &str,
     memory_hint: f32,
 ) -> Option<DialogueSocialSummary> {
+    if let Ok(snapshot) = graph
+        .get_or_project_social_tree_snapshot(current_username, memory_hint)
+        .await
+    {
+        return Some(build_dialogue_summary_from_tree(current_username, &snapshot));
+    }
+
     let (attitudes, _) = graph.get_social_context(current_username).await.ok()?;
     let graph_depth = (attitudes.affinity.abs()
         + attitudes.attachment.abs()
@@ -140,6 +155,89 @@ pub async fn load_dialogue_social_summary(
             current_username, familiarity, trust_state, tension_state
         ),
     })
+}
+
+fn build_affect_context_from_tree(
+    current_username: &str,
+    tree: &SocialTreeSnapshot,
+    memory_hint: f32,
+) -> AffectSocialContext {
+    let context_depth = tree
+        .relationship_core
+        .familiarity
+        .max(memory_hint)
+        .min(1.0);
+
+    let has_signal = tree.relationship_core.affinity != 0.0
+        || tree.relationship_core.attachment != 0.0
+        || tree.relationship_core.trust != 0.0
+        || tree.relationship_core.safety != 0.0
+        || tree.relationship_core.tension != 0.0
+        || tree.self_other_model.perceived_user_affinity != 0.0
+        || tree.self_other_model.perceived_user_attachment != 0.0
+        || tree.self_other_model.perceived_user_trust != 0.0
+        || tree.self_other_model.perceived_user_safety != 0.0
+        || tree.self_other_model.perceived_user_tension != 0.0;
+
+    AffectSocialContext {
+        user_id: current_username.to_string(),
+        known: has_signal,
+        metrics: SocialCoreMetrics {
+            affinity: tree.relationship_core.affinity,
+            attachment: tree.relationship_core.attachment,
+            trust: tree.relationship_core.trust,
+            safety: tree.relationship_core.safety,
+            tension: tree.relationship_core.tension,
+            context_depth,
+        },
+        illusion: IllusionMetrics {
+            affinity: tree.self_other_model.perceived_user_affinity,
+            attachment: tree.self_other_model.perceived_user_attachment,
+            trust: tree.self_other_model.perceived_user_trust,
+            safety: tree.self_other_model.perceived_user_safety,
+            tension: tree.self_other_model.perceived_user_tension,
+        },
+    }
+}
+
+fn build_dialogue_summary_from_tree(
+    current_username: &str,
+    tree: &SocialTreeSnapshot,
+) -> DialogueSocialSummary {
+    let familiarity = match tree.derived_summaries.familiarity_bucket.as_str() {
+        "close" => "close",
+        "known" => "known",
+        _ => "new",
+    };
+
+    let trust_state = match tree.derived_summaries.trust_state.as_str() {
+        "stable" => "stable",
+        "fragile" => "fragile",
+        _ => "neutral",
+    };
+
+    let tension_state = match tree.derived_summaries.tension_state.as_str() {
+        "high" => "high",
+        "medium" => "medium",
+        _ => "low",
+    };
+
+    let summary = if tree.derived_summaries.dialogue_summary_short.trim().is_empty() {
+        format!(
+            "[social summary] user={} familiarity={} trust={} tension={}.",
+            current_username, familiarity, trust_state, tension_state
+        )
+    } else {
+        tree.derived_summaries.dialogue_summary_short.clone()
+    };
+
+    DialogueSocialSummary {
+        user_id: current_username.to_string(),
+        familiarity,
+        trust_state,
+        tension_state,
+        summary,
+    }
 }
 
 fn build_known_affect_context(
