@@ -7,6 +7,125 @@ use serde::Deserialize;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+const SETTINGS_JSON_PATH: &str = "settings.json";
+
+#[derive(Debug, Default, Deserialize)]
+struct SettingsJson {
+    #[serde(default)]
+    debug_mode: Option<bool>,
+    #[serde(default)]
+    log_level: Option<String>,
+    #[serde(default)]
+    chat_max_tokens: Option<u32>,
+    #[serde(default)]
+    semantic_max_tokens: Option<u32>,
+}
+
+fn parse_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn load_settings_json() -> SettingsJson {
+    let path = std::path::Path::new(SETTINGS_JSON_PATH);
+    if !path.exists() {
+        return SettingsJson::default();
+    }
+
+    match std::fs::read_to_string(path) {
+        Ok(content) => match serde_json::from_str::<SettingsJson>(&content) {
+            Ok(settings) => settings,
+            Err(e) => {
+                warn!(path = SETTINGS_JSON_PATH, error = %e, "Failed to parse settings.json");
+                SettingsJson::default()
+            }
+        },
+        Err(e) => {
+            warn!(path = SETTINGS_JSON_PATH, error = %e, "Failed to read settings.json");
+            SettingsJson::default()
+        }
+    }
+}
+
+fn resolve_log_level(config: &Config, settings: &SettingsJson) -> String {
+    if let Ok(level) = std::env::var("PA_LOG_LEVEL") {
+        let trimmed = level.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(level) = &settings.log_level {
+        let trimmed = level.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    config.agent.log_level.trim().to_string()
+}
+
+fn resolve_chat_max_tokens(settings: &SettingsJson) -> u32 {
+    std::env::var("CHAT_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .or(settings.chat_max_tokens)
+        .unwrap_or(2048)
+}
+
+fn resolve_semantic_max_tokens(settings: &SettingsJson) -> u32 {
+    std::env::var("SEMANTIC_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .or(settings.semantic_max_tokens)
+        .unwrap_or(4096)
+}
+
+fn resolve_debug_mode(settings: &SettingsJson) -> bool {
+    std::env::var("DEBUG_MODE")
+        .ok()
+        .map(|v| parse_truthy(&v))
+        .or(settings.debug_mode)
+        .unwrap_or(false)
+}
+
+fn apply_non_api_settings_to_env(settings: &SettingsJson) {
+    if std::env::var("SEMANTIC_MAX_TOKENS").is_err() {
+        std::env::set_var(
+            "SEMANTIC_MAX_TOKENS",
+            resolve_semantic_max_tokens(settings).to_string(),
+        );
+    }
+
+    if std::env::var("CHAT_MAX_TOKENS").is_err() {
+        std::env::set_var("CHAT_MAX_TOKENS", resolve_chat_max_tokens(settings).to_string());
+    }
+
+    if std::env::var("PA_LOG_LEVEL").is_err() {
+        if let Some(level) = &settings.log_level {
+            let trimmed = level.trim();
+            if !trimmed.is_empty() {
+                std::env::set_var("PA_LOG_LEVEL", trimmed);
+            }
+        }
+    }
+
+    if std::env::var("DEBUG_MODE").is_err() {
+        std::env::set_var(
+            "DEBUG_MODE",
+            if settings.debug_mode.unwrap_or(false) { "1" } else { "0" },
+        );
+    }
+}
+
+fn load_settings_and_apply_env() -> SettingsJson {
+    let settings = load_settings_json();
+    apply_non_api_settings_to_env(&settings);
+    settings
+}
+
 use pa_cognitive::{
     AffectEvaluatorConfig, AffectEvaluatorWorker, DialogueEngineConfig, DialogueEngineWorker,
 };
@@ -182,9 +301,15 @@ fn load_config() -> Result<Config> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = load_config()?;
+    let settings = load_settings_and_apply_env();
     let agent_profile = get_agent_profile().clone();
 
-    let default_filter = format!("{},ort=warn,fastembed=warn,lance=warn", config.agent.log_level);
+    if resolve_debug_mode(&settings) {
+        info!(path = SETTINGS_JSON_PATH, "Debug mode is enabled");
+    }
+
+    let log_level = resolve_log_level(&config, &settings);
+    let default_filter = format!("{},ort=warn,fastembed=warn,lance=warn", log_level);
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(default_filter));
     tracing_subscriber::fmt()
@@ -380,10 +505,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let chat_max_tokens = std::env::var("CHAT_MAX_TOKENS")
-        .unwrap_or_else(|_| "2048".to_string())
-        .parse::<u32>()
-        .unwrap_or(2048);
+    let chat_max_tokens = resolve_chat_max_tokens(&settings);
 
     let dialogue_engine_config = DialogueEngineConfig {
         api_base: config.dialogue_engine.api_base.clone(),

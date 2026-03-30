@@ -1,0 +1,6 @@
+{
+  "debug_mode": true,
+  "log_level": "debug",
+  "chat_max_tokens": 4096,
+  "semantic_max_tokens": 4096
+}
