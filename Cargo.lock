@@ -5858,6 +5858,7 @@ dependencies = [
  "pa-sensory",
  "pa-state",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tracing",

@@ -1,5 +1,6 @@
 use pa_core::prompt_registry::render_prompt_or;
 use pa_memory::graph::{AttitudesTowards, CognitiveGraph, IllusionOf, SocialTreeSnapshot};
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct SocialCoreMetrics {
@@ -42,7 +43,7 @@ impl AffectSocialContext {
         let affinity = format!("{:.6}", self.metrics.affinity);
         let attachment = format!("{:.6}", self.metrics.attachment);
         let trust = format!("{:.6}", self.metrics.trust);
-        let safety = format!("{:.6}", self.metrics.safety);
+        let safety = format!("{:.6}", self.metrics.safety); 
         let tension = format!("{:.6}", self.metrics.tension);
         let context_depth = format!("{:.6}", self.metrics.context_depth);
         let ill_affinity = format!("{:.6}", self.illusion.affinity);
@@ -92,7 +93,10 @@ pub async fn load_affect_social_context(
         .get_or_project_social_tree_snapshot(current_username, memory_hint)
         .await
     {
-        Ok(snapshot) => build_affect_context_from_tree(current_username, &snapshot, memory_hint),
+        Ok(snapshot) => {
+            log_tree_snapshot_for_request("affect", current_username, &snapshot, memory_hint);
+            build_affect_context_from_tree(current_username, &snapshot, memory_hint)
+        }
         Err(_) => match graph.get_social_context(current_username).await {
             Ok((attitudes, illusion)) => {
                 build_known_affect_context(current_username, &attitudes, &illusion, memory_hint)
@@ -111,6 +115,7 @@ pub async fn load_dialogue_social_summary(
         .get_or_project_social_tree_snapshot(current_username, memory_hint)
         .await
     {
+        log_tree_snapshot_for_request("dialogue", current_username, &snapshot, memory_hint);
         return Some(build_dialogue_summary_from_tree(current_username, &snapshot));
     }
 
@@ -155,6 +160,39 @@ pub async fn load_dialogue_social_summary(
             current_username, familiarity, trust_state, tension_state
         ),
     })
+}
+
+fn log_tree_snapshot_for_request(scope: &str, user_id: &str, tree: &SocialTreeSnapshot, memory_hint: f32) {
+    debug!(
+        kind = "social.tree",
+        scope = scope,
+        user = %user_id,
+        memory_hint,
+        relationship_affinity = tree.relationship_core.affinity,
+        relationship_attachment = tree.relationship_core.attachment,
+        relationship_trust = tree.relationship_core.trust,
+        relationship_safety = tree.relationship_core.safety,
+        relationship_tension = tree.relationship_core.tension,
+        relationship_familiarity = tree.relationship_core.familiarity,
+        boundary_reliability = tree.relationship_core.boundary_reliability,
+        tension_live = tree.dynamic_state.tension_live,
+        warmth_live = tree.dynamic_state.warmth_live,
+        unresolved_friction_score = tree.dynamic_state.unresolved_friction_score,
+        perceived_user_affinity = tree.self_other_model.perceived_user_affinity,
+        perceived_user_attachment = tree.self_other_model.perceived_user_attachment,
+        perceived_user_trust = tree.self_other_model.perceived_user_trust,
+        perceived_user_safety = tree.self_other_model.perceived_user_safety,
+        perceived_user_tension = tree.self_other_model.perceived_user_tension,
+        model_confidence = tree.self_other_model.confidence,
+        familiarity_bucket = %tree.derived_summaries.familiarity_bucket,
+        trust_state = %tree.derived_summaries.trust_state,
+        tension_state = %tree.derived_summaries.tension_state,
+        dialogue_summary = %tree.derived_summaries.dialogue_summary_short,
+        schema_version = %tree.meta.schema_version,
+        updated_at = %tree.meta.updated_at,
+        writer_version = %tree.meta.writer_version,
+        "Social tree snapshot resolved for request"
+    );
 }
 
 fn build_affect_context_from_tree(
