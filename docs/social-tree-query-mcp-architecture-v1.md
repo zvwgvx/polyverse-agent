@@ -3,9 +3,9 @@
 **Version:** v1.1
 **Date:** 2026-03-31
 **Status:** Phase 1 implemented and runtime-smoked; Phase 2 dialogue tool loop implemented; Phase 3 planned
-**Audience:** pa-cognitive, pa-memory, pa-cockpit-api, pa-mcp, future MCP runtime team
+**Audience:** cognitive, memory, cockpit-api, mcp, future MCP runtime team
 
-**Workspace note:** The target repo layout is `apps/`, `libs/`, `services/`, `testing/`, and `tools/`. Historical references in this document still use current in-repo paths under `crates/`. See `docs/workspace-layout.md`.
+**Workspace note:** The repo layout now uses `apps/`, `libs/`, `services/`, `testing/`, and `tools/`. Some historical sections may still describe pre-migration states, but current file references below use the live paths. See `docs/workspace-layout.md`.
 
 ---
 
@@ -40,7 +40,7 @@ The goal is not to replace Graph. The goal is to standardize a query layer so th
 
 ### Query contract stabilization (done)
 
-In `crates/pa-cognitive/src/social_context.rs`, we now have:
+In `libs/cognitive/src/social_context.rs`, we now have:
 
 - `SocialQueryIntent`
 - `SocialQueryOptions`
@@ -52,7 +52,7 @@ In `crates/pa-cognitive/src/social_context.rs`, we now have:
 
 ### MCP read-only foundation (done)
 
-In `crates/pa-mcp`:
+In `services/mcp`:
 
 - Worker + server transport with graceful lifecycle
 - Endpoints:
@@ -66,7 +66,7 @@ In `crates/pa-mcp`:
 
 ### Runtime wiring (done)
 
-In `crates/pa-agent/src/main.rs`:
+In `apps/agent/src/main.rs`:
 
 - MCP worker is registered when `MCP_ENABLED=1`
 - env-driven MCP config:
@@ -76,7 +76,7 @@ In `crates/pa-agent/src/main.rs`:
 
 ### Test coverage (done for Phase 1 baseline)
 
-In `crates/pa-mcp/tests`:
+In `services/mcp/tests`:
 
 - endpoint contract tests (`tools`, `tools/call` success + error)
 - input validation tests (empty `user_id`)
@@ -121,22 +121,22 @@ In `crates/pa-mcp/tests`:
 
 ## 0.5 Implementation references (current code)
 
-- Query facade: `crates/pa-cognitive/src/social_context.rs`
-- Shared dialogue/MCP tool registry: `crates/pa-cognitive/src/dialogue_tools.rs`
-- Dialogue engine tool loop + fallback path: `crates/pa-cognitive/src/dialogue_engine.rs`
-- Query exports: `crates/pa-cognitive/src/lib.rs`
-- MCP config: `crates/pa-mcp/src/config.rs`
-- MCP registry: `crates/pa-mcp/src/registry/mod.rs`
-- MCP transport/worker: `crates/pa-mcp/src/server/mod.rs`
-- Runtime wiring: `crates/pa-agent/src/main.rs`
+- Query facade: `libs/cognitive/src/social_context.rs`
+- Shared dialogue/MCP tool registry: `libs/cognitive/src/dialogue_tools.rs`
+- Dialogue engine tool loop + fallback path: `libs/cognitive/src/dialogue_engine.rs`
+- Query exports: `libs/cognitive/src/lib.rs`
+- MCP config: `services/mcp/src/config.rs`
+- MCP registry: `services/mcp/src/registry/mod.rs`
+- MCP transport/worker: `services/mcp/src/server/mod.rs`
+- Runtime wiring: `apps/agent/src/main.rs`
 - Prompt registry entry: `config/prompt_registry.json`
 - Internal tool policy prompt: `prompts/dialogue_engine/tool_policy.txt`
 - MCP tests:
-  - `crates/pa-mcp/tests/http_contract.rs`
-  - `crates/pa-mcp/tests/tools.rs`
-  - `crates/pa-mcp/tests/server.rs`
+  - `services/mcp/tests/http_contract.rs`
+  - `services/mcp/tests/tools.rs`
+  - `services/mcp/tests/server.rs`
 - Dialogue helper/gating tests:
-  - `crates/pa-cognitive/src/dialogue_engine.rs`
+  - `libs/cognitive/src/dialogue_engine.rs`
 
 ---
 
@@ -168,7 +168,7 @@ In `crates/pa-mcp/tests`:
 
 ## 1.1 What already exists in the codebase
 
-### Tree snapshot model in `pa-memory`
+### Tree snapshot model in `memory`
 
 `SocialTreeSnapshot` and child nodes already exist:
 
@@ -178,7 +178,7 @@ In `crates/pa-mcp/tests`:
 - `derived_summaries`
 - `meta`
 
-Source: `crates/pa-memory/src/graph.rs`.
+Source: `libs/memory/src/graph.rs`.
 
 ### Projection and read APIs in `CognitiveGraph`
 
@@ -190,14 +190,14 @@ Already implemented:
 
 Current projection maps Graph edges (`attitudes_towards`, `illusion_of`) into `social_tree_root`.
 
-### Query facade in `pa-cognitive`
+### Query facade in `cognitive`
 
 Already implemented runtime-facing helpers:
 
 - `load_affect_social_context(...)` (tree-first, graph fallback)
 - `load_dialogue_social_summary(...)` (tree-first, graph fallback)
 
-Source: `crates/pa-cognitive/src/social_context.rs`.
+Source: `libs/cognitive/src/social_context.rs`.
 
 ### Runtime integration
 
@@ -254,7 +254,7 @@ Future:
 
 ### 3.1 Layer responsibilities
 
-1. **Graph write layer (`pa-memory::graph`)**
+1. **Graph write layer (`memory::graph`)**
    - Persists social/illusion/dynamics delta updates.
    - Remains short/mid-horizon source-of-truth.
 
@@ -262,7 +262,7 @@ Future:
    - Converts current Graph state into query-optimized snapshots.
    - Writes into `social_tree_root`.
 
-3. **Query facade layer (`pa-cognitive::social_context` + future `pa-memory::social_query`)**
+3. **Query facade layer (`cognitive::social_context` + future `memory::social_query`)**
    - Accepts intent + policy.
    - Returns consumer-specific payloads.
    - Enforces freshness/fallback/observability behavior.
@@ -559,7 +559,7 @@ Do **not** expose write tools in v1.
 
 ### Recommended option
 
-- Host MCP context server as a dedicated process (new crate) or integrate into `pa-cockpit-api` based on operational preference.
+- Host MCP context server as a dedicated process (new crate) or integrate into `cockpit-api` based on operational preference.
 - MCP handlers must call the Social Query Facade and should not query DB directly.
 
 ### Why
@@ -722,24 +722,24 @@ Run periodic checks (time-based or request-sampled):
 
 ## 14) Implementation blueprint (file-by-file)
 
-## 14.1 `crates/pa-memory/src/graph.rs`
+## 14.1 `libs/memory/src/graph.rs`
 
 - Keep existing projection/read primitives.
 - Add helper utilities for `meta.updated_at` freshness checks as needed.
 - Add parity sampling helper (later phase).
 
-## 14.2 `crates/pa-cognitive/src/social_context.rs`
+## 14.2 `libs/cognitive/src/social_context.rs`
 
 - Normalize facade into intent/options-driven query API (possibly split into dedicated module).
 - Return extra response meta (`source`, `stale`, `schema/version`) for observability.
 - Standardize fallback logging keys.
 
-## 14.3 `crates/pa-cognitive/src/dialogue_engine.rs`
+## 14.3 `libs/cognitive/src/dialogue_engine.rs`
 
 - Keep current gate logic.
 - Route summary fetch through the normalized facade API.
 
-## 14.4 `crates/pa-cognitive/src/affect_evaluator.rs`
+## 14.4 `libs/cognitive/src/affect_evaluator.rs`
 
 - Keep always-on context retrieval.
 - Add explicit logs for source tree/graph/default and stale flags.
@@ -762,8 +762,8 @@ Done:
 
 - Defined `SocialQueryIntent` + `SocialQueryOptions`
 - Normalized payload + `meta` via `query_social_context`
-- Added mapping/fallback tests in `pa-cognitive`
-- Shipped read-only MCP transport with two tools + contract tests in `pa-mcp`
+- Added mapping/fallback tests in `cognitive`
+- Shipped read-only MCP transport with two tools + contract tests in `mcp`
 - Validated local runtime startup plus MCP list/call success and error paths
 
 Still open after close-out:

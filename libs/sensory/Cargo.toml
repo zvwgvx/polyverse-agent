@@ -1,0 +1,19 @@
+[package]
+name = "sensory"
+description = "Platform adapters (Discord, Telegram) for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kernel = { path = "../kernel" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serenity = { workspace = true }
+teloxide = { workspace = true }
+chrono = { workspace = true }
+tokio-tungstenite = "0.28.0"
+futures-util = "0.3.32"
+serde.workspace = true
+serde_json.workspace = true

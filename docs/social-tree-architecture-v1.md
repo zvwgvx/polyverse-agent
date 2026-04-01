@@ -197,7 +197,7 @@ Implemented:
 
 ## 7.3 Shared social facade
 
-Implemented in `crates/pa-cognitive/src/social_context.rs`:
+Implemented in `libs/cognitive/src/social_context.rs`:
 - typed models for affect and dialogue summary retrieval
 - affect context serialization helper (`to_prompt_text()`)
 - dialogue summary retrieval helper (`load_dialogue_social_summary(...)`)
@@ -264,13 +264,13 @@ These should remain true during migration:
 ## 11) Key files for team handoff
 
 - Dialogue assembly and social gate:
-  - `crates/pa-cognitive/src/dialogue_engine.rs`
+  - `libs/cognitive/src/dialogue_engine.rs`
 - Shared social facade/types:
-  - `crates/pa-cognitive/src/social_context.rs`
+  - `libs/cognitive/src/social_context.rs`
 - Affect retrieval/update and parser robustness:
-  - `crates/pa-cognitive/src/affect_evaluator.rs`
+  - `libs/cognitive/src/affect_evaluator.rs`
 - Graph read/write primitives:
-  - `crates/pa-memory/src/graph.rs`
+  - `libs/memory/src/graph.rs`
 - State prompt scope config:
   - `config/state_prompt.json`
 

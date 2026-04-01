@@ -1,0 +1,21 @@
+[package]
+name = "integration-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+axum = "0.8.8"
+chrono = { workspace = true }
+cognitive = { path = "../../libs/cognitive" }
+kernel = { path = "../../libs/kernel" }
+mcp = { path = "../../services/mcp" }
+memory = { path = "../../libs/memory" }
+runtime = { path = "../../libs/runtime" }
+state = { path = "../../libs/state" }
+test-support = { path = "../test-support" }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower = "0.5.2"

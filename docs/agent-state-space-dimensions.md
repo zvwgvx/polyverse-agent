@@ -165,9 +165,9 @@ Dimension contribution: `7*G`
 
 - Social dimensions already grounded:
   - `affinity`, `attachment`, `trust`, `safety`, `tension`
-  - file: `crates/pa-memory/src/graph.rs`
+  - file: `libs/memory/src/graph.rs`
 - Preference dimensions already partially grounded:
   - `preference`, `stress_association` (currently `stress`), `fascination`
-  - file: `crates/pa-memory/src/graph.rs`
+  - file: `libs/memory/src/graph.rs`
 - Goal state does not yet have a dedicated module; recommended: `GoalStore + GoalReducer`.
 - Body/Affect/Narrative/Policy/Safety should be centralized in a `UnifiedInternalState` with event-driven reducers.
