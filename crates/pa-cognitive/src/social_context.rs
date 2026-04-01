@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use pa_core::prompt_registry::render_prompt_or;
 use pa_memory::graph::{AttitudesTowards, CognitiveGraph, IllusionOf, SocialTreeSnapshot};
 use tracing::debug;
@@ -84,26 +85,144 @@ impl AffectSocialContext {
     }
 }
 
+const AFFECT_MAX_STALENESS_MS: i64 = 5 * 60 * 1000;
+const DIALOGUE_MAX_STALENESS_MS: i64 = 30 * 60 * 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocialQueryIntent {
+    AffectRich,
+    DialogueSummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SocialQueryOptions {
+    pub memory_hint: f32,
+    pub max_staleness_ms: Option<i64>,
+    pub force_project: bool,
+    pub allow_stale_fallback: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocialQuerySource {
+    TreeFresh,
+    TreeStale,
+    GraphFallback,
+    DefaultFallback,
+}
+
+#[derive(Debug, Clone)]
+pub struct SocialQueryMeta {
+    pub source: SocialQuerySource,
+    pub stale: bool,
+    pub schema_version: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SocialQueryResult {
+    Affect {
+        context: AffectSocialContext,
+        meta: SocialQueryMeta,
+    },
+    Dialogue {
+        summary: Option<DialogueSocialSummary>,
+        meta: SocialQueryMeta,
+    },
+}
+
+impl SocialQueryIntent {
+    fn scope(self) -> &'static str {
+        match self {
+            SocialQueryIntent::AffectRich => "affect",
+            SocialQueryIntent::DialogueSummary => "dialogue",
+        }
+    }
+}
+
+impl SocialQueryOptions {
+    pub fn for_affect(memory_hint: f32) -> Self {
+        Self {
+            memory_hint,
+            max_staleness_ms: Some(AFFECT_MAX_STALENESS_MS),
+            force_project: false,
+            allow_stale_fallback: true,
+        }
+    }
+
+    pub fn for_dialogue(memory_hint: f32) -> Self {
+        Self {
+            memory_hint,
+            max_staleness_ms: Some(DIALOGUE_MAX_STALENESS_MS),
+            force_project: false,
+            allow_stale_fallback: true,
+        }
+    }
+
+    pub fn with_max_staleness_ms(mut self, max_staleness_ms: Option<i64>) -> Self {
+        self.max_staleness_ms = max_staleness_ms;
+        self
+    }
+
+    pub fn with_force_project(mut self, force_project: bool) -> Self {
+        self.force_project = force_project;
+        self
+    }
+
+    pub fn with_allow_stale_fallback(mut self, allow_stale_fallback: bool) -> Self {
+        self.allow_stale_fallback = allow_stale_fallback;
+        self
+    }
+}
+
+impl SocialQuerySource {
+    fn as_str(self) -> &'static str {
+        match self {
+            SocialQuerySource::TreeFresh => "tree_fresh",
+            SocialQuerySource::TreeStale => "tree_stale",
+            SocialQuerySource::GraphFallback => "graph_fallback",
+            SocialQuerySource::DefaultFallback => "default_fallback",
+        }
+    }
+}
+
+impl SocialQueryMeta {
+    fn from_tree(source: SocialQuerySource, stale: bool, tree: &SocialTreeSnapshot) -> Self {
+        Self {
+            source,
+            stale,
+            schema_version: Some(tree.meta.schema_version.clone()),
+            updated_at: Some(tree.meta.updated_at.clone()),
+        }
+    }
+
+    fn from_fallback(source: SocialQuerySource) -> Self {
+        Self {
+            source,
+            stale: false,
+            schema_version: None,
+            updated_at: None,
+        }
+    }
+}
+
 pub async fn load_affect_social_context(
     graph: &CognitiveGraph,
     current_username: &str,
     memory_hint: f32,
 ) -> AffectSocialContext {
-    match graph
-        .get_or_project_social_tree_snapshot(current_username, memory_hint)
-        .await
-    {
-        Ok(snapshot) => {
-            log_tree_snapshot_for_request("affect", current_username, &snapshot, memory_hint);
-            build_affect_context_from_tree(current_username, &snapshot, memory_hint)
-        }
-        Err(_) => match graph.get_social_context(current_username).await {
-            Ok((attitudes, illusion)) => {
-                build_known_affect_context(current_username, &attitudes, &illusion, memory_hint)
-            }
-            Err(_) => build_default_affect_context(current_username, memory_hint),
-        },
-    }
+    let options = SocialQueryOptions::for_affect(memory_hint);
+    let SocialQueryResult::Affect { context, .. } = query_social_context(
+        graph,
+        SocialQueryIntent::AffectRich,
+        current_username,
+        options,
+    )
+    .await
+    else {
+        return build_default_affect_context(current_username, memory_hint);
+    };
+
+    context
 }
 
 pub async fn load_dialogue_social_summary(
@@ -111,15 +230,200 @@ pub async fn load_dialogue_social_summary(
     current_username: &str,
     memory_hint: f32,
 ) -> Option<DialogueSocialSummary> {
-    if let Ok(snapshot) = graph
-        .get_or_project_social_tree_snapshot(current_username, memory_hint)
-        .await
-    {
-        log_tree_snapshot_for_request("dialogue", current_username, &snapshot, memory_hint);
-        return Some(build_dialogue_summary_from_tree(current_username, &snapshot));
+    let options = SocialQueryOptions::for_dialogue(memory_hint);
+    let SocialQueryResult::Dialogue { summary, .. } = query_social_context(
+        graph,
+        SocialQueryIntent::DialogueSummary,
+        current_username,
+        options,
+    )
+    .await
+    else {
+        return None;
+    };
+
+    summary
+}
+
+pub async fn query_social_context(
+    graph: &CognitiveGraph,
+    intent: SocialQueryIntent,
+    current_username: &str,
+    options: SocialQueryOptions,
+) -> SocialQueryResult {
+    resolve_social_query(graph, intent, current_username, options).await
+}
+
+async fn resolve_social_query(
+    graph: &CognitiveGraph,
+    intent: SocialQueryIntent,
+    current_username: &str,
+    options: SocialQueryOptions,
+) -> SocialQueryResult {
+    if let Some(result) = resolve_tree_query(graph, intent, current_username, options).await {
+        return result;
     }
 
-    let (attitudes, _) = graph.get_social_context(current_username).await.ok()?;
+    resolve_graph_or_default_query(graph, intent, current_username, options).await
+}
+
+async fn resolve_tree_query(
+    graph: &CognitiveGraph,
+    intent: SocialQueryIntent,
+    current_username: &str,
+    options: SocialQueryOptions,
+) -> Option<SocialQueryResult> {
+    let mut snapshot = if options.force_project {
+        graph.project_social_tree(current_username, options.memory_hint).await.ok()?
+    } else {
+        graph
+            .get_or_project_social_tree_snapshot(current_username, options.memory_hint)
+            .await
+            .ok()?
+    };
+
+    let initial_stale = is_snapshot_stale(
+        &snapshot.meta.updated_at,
+        options.max_staleness_ms,
+        Utc::now(),
+    );
+
+    if initial_stale && !options.force_project {
+        if let Ok(refreshed) = graph
+            .project_social_tree(current_username, options.memory_hint)
+            .await
+        {
+            snapshot = refreshed;
+        }
+    }
+
+    let (source, stale) = classify_tree_snapshot(
+        &snapshot.meta.updated_at,
+        options.max_staleness_ms,
+        options.allow_stale_fallback,
+        Utc::now(),
+    )?;
+
+    let meta = SocialQueryMeta::from_tree(source, stale, &snapshot);
+    log_tree_snapshot_for_request(
+        intent.scope(),
+        current_username,
+        &snapshot,
+        options.memory_hint,
+    );
+    log_social_query_meta(intent.scope(), current_username, &meta);
+
+    Some(match intent {
+        SocialQueryIntent::AffectRich => SocialQueryResult::Affect {
+            context: build_affect_context_from_tree(current_username, &snapshot, options.memory_hint),
+            meta,
+        },
+        SocialQueryIntent::DialogueSummary => SocialQueryResult::Dialogue {
+            summary: Some(build_dialogue_summary_from_tree(current_username, &snapshot)),
+            meta,
+        },
+    })
+}
+
+async fn resolve_graph_or_default_query(
+    graph: &CognitiveGraph,
+    intent: SocialQueryIntent,
+    current_username: &str,
+    options: SocialQueryOptions,
+) -> SocialQueryResult {
+    match graph.get_social_context(current_username).await {
+        Ok((attitudes, illusion)) => {
+            let meta = SocialQueryMeta::from_fallback(SocialQuerySource::GraphFallback);
+            log_social_query_meta(intent.scope(), current_username, &meta);
+
+            match intent {
+                SocialQueryIntent::AffectRich => SocialQueryResult::Affect {
+                    context: build_known_affect_context(
+                        current_username,
+                        &attitudes,
+                        &illusion,
+                        options.memory_hint,
+                    ),
+                    meta,
+                },
+                SocialQueryIntent::DialogueSummary => SocialQueryResult::Dialogue {
+                    summary: Some(build_dialogue_summary_from_graph(
+                        current_username,
+                        &attitudes,
+                        options.memory_hint,
+                    )),
+                    meta,
+                },
+            }
+        }
+        Err(_) => {
+            let meta = SocialQueryMeta::from_fallback(SocialQuerySource::DefaultFallback);
+            log_social_query_meta(intent.scope(), current_username, &meta);
+
+            match intent {
+                SocialQueryIntent::AffectRich => SocialQueryResult::Affect {
+                    context: build_default_affect_context(current_username, options.memory_hint),
+                    meta,
+                },
+                SocialQueryIntent::DialogueSummary => SocialQueryResult::Dialogue {
+                    summary: None,
+                    meta,
+                },
+            }
+        }
+    }
+}
+
+fn classify_tree_snapshot(
+    updated_at: &str,
+    max_staleness_ms: Option<i64>,
+    allow_stale_fallback: bool,
+    now: DateTime<Utc>,
+) -> Option<(SocialQuerySource, bool)> {
+    let stale = is_snapshot_stale(updated_at, max_staleness_ms, now);
+    if stale && !allow_stale_fallback {
+        None
+    } else if stale {
+        Some((SocialQuerySource::TreeStale, true))
+    } else {
+        Some((SocialQuerySource::TreeFresh, false))
+    }
+}
+
+fn parse_updated_at_rfc3339(updated_at: &str) -> Option<DateTime<Utc>> {
+    if updated_at.trim().is_empty() {
+        return None;
+    }
+
+    DateTime::parse_from_rfc3339(updated_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn snapshot_age_ms(updated_at: &str, now: DateTime<Utc>) -> Option<i64> {
+    let updated_at = parse_updated_at_rfc3339(updated_at)?;
+    let age = now.signed_duration_since(updated_at).num_milliseconds();
+    Some(age.max(0))
+}
+
+fn is_snapshot_stale(updated_at: &str, max_staleness_ms: Option<i64>, now: DateTime<Utc>) -> bool {
+    let Some(max_staleness_ms) = max_staleness_ms else {
+        return false;
+    };
+
+    let max_staleness_ms = max_staleness_ms.max(0);
+
+    match snapshot_age_ms(updated_at, now) {
+        Some(age_ms) => age_ms > max_staleness_ms,
+        None => true,
+    }
+}
+
+fn build_dialogue_summary_from_graph(
+    current_username: &str,
+    attitudes: &AttitudesTowards,
+    memory_hint: f32,
+) -> DialogueSocialSummary {
     let graph_depth = (attitudes.affinity.abs()
         + attitudes.attachment.abs()
         + attitudes.trust.abs()
@@ -150,7 +454,7 @@ pub async fn load_dialogue_social_summary(
         "low"
     };
 
-    Some(DialogueSocialSummary {
+    DialogueSocialSummary {
         user_id: current_username.to_string(),
         familiarity,
         trust_state,
@@ -159,7 +463,7 @@ pub async fn load_dialogue_social_summary(
             "[social summary] user={} familiarity={} trust={} tension={}.",
             current_username, familiarity, trust_state, tension_state
         ),
-    })
+    }
 }
 
 fn log_tree_snapshot_for_request(scope: &str, user_id: &str, tree: &SocialTreeSnapshot, memory_hint: f32) {
@@ -193,6 +497,159 @@ fn log_tree_snapshot_for_request(scope: &str, user_id: &str, tree: &SocialTreeSn
         writer_version = %tree.meta.writer_version,
         "Social tree snapshot resolved for request"
     );
+}
+
+fn log_social_query_meta(scope: &str, user_id: &str, meta: &SocialQueryMeta) {
+    debug!(
+        kind = "social.query",
+        scope = scope,
+        user = %user_id,
+        source = meta.source.as_str(),
+        stale = meta.stale,
+        schema_version = meta.schema_version.as_deref().unwrap_or(""),
+        updated_at = meta.updated_at.as_deref().unwrap_or(""),
+        "Social query resolved"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tree_for_mapping(familiarity: &str, trust: &str, tension: &str, summary: &str) -> SocialTreeSnapshot {
+        SocialTreeSnapshot {
+            user_id: "alice".to_string(),
+            relationship_core: pa_memory::graph::SocialTreeRelationshipCore {
+                affinity: 0.1,
+                attachment: 0.1,
+                trust: 0.1,
+                safety: 0.1,
+                tension: 0.1,
+                familiarity: 0.4,
+                boundary_reliability: 0.4,
+            },
+            dynamic_state: pa_memory::graph::SocialTreeDynamicState::default(),
+            self_other_model: pa_memory::graph::SocialTreeSelfOtherModel::default(),
+            derived_summaries: pa_memory::graph::SocialTreeDerivedSummaries {
+                dialogue_summary_short: summary.to_string(),
+                familiarity_bucket: familiarity.to_string(),
+                trust_state: trust.to_string(),
+                tension_state: tension.to_string(),
+            },
+            meta: pa_memory::graph::SocialTreeMeta {
+                schema_version: "v1".to_string(),
+                updated_at: Utc::now().to_rfc3339(),
+                decay_policy: "graph_decay_0.99_per_day".to_string(),
+                writer_version: "graph_projection_v1".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn parse_updated_at_rfc3339_valid_invalid_and_empty() {
+        let ts = "2026-03-31T12:34:56Z";
+        assert!(parse_updated_at_rfc3339(ts).is_some());
+        assert!(parse_updated_at_rfc3339("").is_none());
+        assert!(parse_updated_at_rfc3339("not-a-timestamp").is_none());
+    }
+
+    #[test]
+    fn staleness_threshold_boundary() {
+        let now = Utc::now();
+        let fresh = (now - chrono::Duration::milliseconds(4999)).to_rfc3339();
+        let stale = (now - chrono::Duration::milliseconds(5001)).to_rfc3339();
+
+        assert!(!is_snapshot_stale(&fresh, Some(5000), now));
+        assert!(is_snapshot_stale(&stale, Some(5000), now));
+    }
+
+    #[test]
+    fn classify_tree_snapshot_allows_or_rejects_stale_by_policy() {
+        let now = Utc::now();
+        let stale = (now - chrono::Duration::minutes(60)).to_rfc3339();
+
+        let allowed = classify_tree_snapshot(&stale, Some(5 * 60 * 1000), true, now);
+        assert_eq!(allowed, Some((SocialQuerySource::TreeStale, true)));
+
+        let rejected = classify_tree_snapshot(&stale, Some(5 * 60 * 1000), false, now);
+        assert!(rejected.is_none());
+    }
+
+    #[test]
+    fn dialogue_tree_mapping_normalizes_unknown_buckets() {
+        let tree = tree_for_mapping("mystery", "odd", "volatile", "");
+        let summary = build_dialogue_summary_from_tree("alice", &tree);
+
+        assert_eq!(summary.familiarity, "new");
+        assert_eq!(summary.trust_state, "neutral");
+        assert_eq!(summary.tension_state, "low");
+        assert!(summary.summary.contains("[social summary] user=alice"));
+    }
+
+    #[test]
+    fn dialogue_tree_mapping_keeps_known_buckets() {
+        let tree = tree_for_mapping("close", "stable", "high", "custom summary");
+        let summary = build_dialogue_summary_from_tree("alice", &tree);
+
+        assert_eq!(summary.familiarity, "close");
+        assert_eq!(summary.trust_state, "stable");
+        assert_eq!(summary.tension_state, "high");
+        assert_eq!(summary.summary, "custom summary");
+    }
+
+    #[test]
+    fn graph_dialogue_mapping_thresholds() {
+        let attitudes = AttitudesTowards {
+            affinity: 0.4,
+            attachment: 0.4,
+            trust: 0.36,
+            safety: 0.4,
+            tension: 0.3,
+        };
+        let summary = build_dialogue_summary_from_graph("alice", &attitudes, 0.0);
+        assert_eq!(summary.familiarity, "known");
+        assert_eq!(summary.trust_state, "stable");
+        assert_eq!(summary.tension_state, "medium");
+
+        let attitudes_fragile = AttitudesTowards {
+            affinity: 0.0,
+            attachment: 0.0,
+            trust: -0.21,
+            safety: 0.0,
+            tension: 0.56,
+        };
+        let summary_fragile = build_dialogue_summary_from_graph("alice", &attitudes_fragile, 0.0);
+        assert_eq!(summary_fragile.familiarity, "new");
+        assert_eq!(summary_fragile.trust_state, "fragile");
+        assert_eq!(summary_fragile.tension_state, "high");
+    }
+
+    #[test]
+    fn affect_context_known_vs_default_fallback_outputs() {
+        let attitudes = AttitudesTowards {
+            affinity: 0.3,
+            attachment: 0.2,
+            trust: 0.1,
+            safety: 0.2,
+            tension: 0.0,
+        };
+        let illusion = IllusionOf {
+            affinity: 0.1,
+            attachment: 0.1,
+            trust: 0.1,
+            safety: 0.1,
+            tension: 0.1,
+        };
+
+        let known = build_known_affect_context("alice", &attitudes, &illusion, 0.05);
+        assert!(known.known);
+        assert!(known.metrics.context_depth > 0.0);
+
+        let defaulted = build_default_affect_context("alice", 0.05);
+        assert!(!defaulted.known);
+        assert_eq!(defaulted.metrics.affinity, 0.0);
+        assert_eq!(defaulted.illusion.trust, 0.0);
+    }
 }
 
 fn build_affect_context_from_tree(

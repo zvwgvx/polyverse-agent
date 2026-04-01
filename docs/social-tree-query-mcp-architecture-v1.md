@@ -1,15 +1,17 @@
 # Social Tree Query Model + MCP Context Server Architecture (Detailed)
 
-**Version:** v1.0-draft
-**Date:** 2026-03-30
-**Status:** Proposed implementation design
-**Audience:** pa-cognitive, pa-memory, pa-cockpit-api, future MCP runtime team
+**Version:** v1.1
+**Date:** 2026-03-31
+**Status:** Phase 1 implemented and runtime-smoked; Phase 2 dialogue tool loop implemented; Phase 3 planned
+**Audience:** pa-cognitive, pa-memory, pa-cockpit-api, pa-mcp, future MCP runtime team
+
+**Workspace note:** The target repo layout is `apps/`, `libs/`, `services/`, `testing/`, and `tools/`. Historical references in this document still use current in-repo paths under `crates/`. See `docs/workspace-layout.md`.
 
 ---
 
 ## 0) Executive summary
 
-This document defines a detailed architecture for:
+This document defines the architecture and current delivery status for:
 
 1. A **Tree Query Model** for social-context retrieval.
 2. A **read-only v1 MCP Context Server** for tool-style social-context access.
@@ -23,7 +25,142 @@ The goal is not to replace Graph. The goal is to standardize a query layer so th
 
 - Affect always receives rich and stable social context.
 - Dialogue receives social context only when needed (gate-based).
-- The system is ready for scalable MCP/tool retrieval.
+- The runtime is ready for scalable MCP/tool retrieval.
+
+### Current delivery snapshot (2026-03-31)
+
+- **Done:** Phase 1 query contract + read-only MCP transport + tests + live local runtime smoke validation.
+- **Done:** Phase 2 dialogue now has a bounded, feature-flagged model-driven read-tool loop with candidate-user allowlisting and legacy direct-summary fallback.
+- **Not done yet:** action tools + approval/policy gates, broader parity automation, and richer MCP/dialogue metrics coverage.
+- **Main risk now:** operational observability is still mostly log-first; metrics/SLO instrumentation should be expanded before broader rollout.
+
+---
+
+## 0.1 What we have implemented
+
+### Query contract stabilization (done)
+
+In `crates/pa-cognitive/src/social_context.rs`, we now have:
+
+- `SocialQueryIntent`
+- `SocialQueryOptions`
+- `SocialQueryResult`
+- `SocialQueryMeta`
+- `query_social_context(...)` as normalized facade
+- freshness/staleness behavior via `meta.updated_at` + policy controls
+- standardized fallback sources (`tree_fresh`, `tree_stale`, `graph_fallback`, `default_fallback`)
+
+### MCP read-only foundation (done)
+
+In `crates/pa-mcp`:
+
+- Worker + server transport with graceful lifecycle
+- Endpoints:
+  - `GET /api/mcp/tools`
+  - `POST /api/mcp/tools/call`
+- Registry with read-only tool descriptors (`namespace`, `read_only`)
+- Tools:
+  - `social.get_affect_context`
+  - `social.get_dialogue_summary`
+- Input validation + normalized response `meta` passthrough
+
+### Runtime wiring (done)
+
+In `crates/pa-agent/src/main.rs`:
+
+- MCP worker is registered when `MCP_ENABLED=1`
+- env-driven MCP config:
+  - `MCP_BIND`
+  - `MCP_REQUEST_TIMEOUT_MS`
+  - `MCP_MAX_TOOL_CALLS_PER_TURN`
+
+### Test coverage (done for Phase 1 baseline)
+
+In `crates/pa-mcp/tests`:
+
+- endpoint contract tests (`tools`, `tools/call` success + error)
+- input validation tests (empty `user_id`)
+- deterministic unknown-tool behavior test
+- response meta presence tests for both tools
+
+---
+
+## 0.2 What is not implemented yet
+
+1. Action namespace execution path (currently intentionally blocked by read-only scope).
+2. Policy/approval/audit gate interfaces for mutating tools.
+3. Full parity framework automation/alerts (Graph↔Tree drift monitoring beyond baseline logs/tests).
+4. Broader operational metrics/SLO coverage for MCP and dialogue tool-call paths.
+
+---
+
+## 0.3 Known issues and operational concerns
+
+1. **Runtime smoke completed:** live local process validation passed with `MCP_ENABLED=1`, including worker startup/bind, `GET /api/mcp/tools`, and `POST /api/mcp/tools/call` success/error paths.
+2. **Transport shape is local/internal:** API is intentionally local, not yet hardened for remote/public exposure.
+3. **No model autonomy yet:** current MCP is callable by transport, but dialogue model does not self-decide tool calls yet.
+4. **Observability is mostly log-first:** metrics/SLO dashboards for MCP-specific traffic are still minimal and should be expanded.
+
+---
+
+## 0.4 Direction from here
+
+### Next immediate milestone
+
+- Run end-to-end runtime smoke for the new dialogue tool loop with the feature flag both off and on.
+- Expand operational notes for default bind/timeout, degradation behavior, and failure modes.
+
+### Phase 3
+
+- Keep `read` / `action` namespace split.
+- Introduce policy/approval/audit interfaces before enabling mutating tools.
+- Maintain Rust MCP gateway as control plane and leave room for polyglot tool executors.
+- Add broader parity and observability coverage for Graph↔Tree and tool-call traffic.
+
+---
+
+## 0.5 Implementation references (current code)
+
+- Query facade: `crates/pa-cognitive/src/social_context.rs`
+- Shared dialogue/MCP tool registry: `crates/pa-cognitive/src/dialogue_tools.rs`
+- Dialogue engine tool loop + fallback path: `crates/pa-cognitive/src/dialogue_engine.rs`
+- Query exports: `crates/pa-cognitive/src/lib.rs`
+- MCP config: `crates/pa-mcp/src/config.rs`
+- MCP registry: `crates/pa-mcp/src/registry/mod.rs`
+- MCP transport/worker: `crates/pa-mcp/src/server/mod.rs`
+- Runtime wiring: `crates/pa-agent/src/main.rs`
+- Prompt registry entry: `config/prompt_registry.json`
+- Internal tool policy prompt: `prompts/dialogue_engine/tool_policy.txt`
+- MCP tests:
+  - `crates/pa-mcp/tests/http_contract.rs`
+  - `crates/pa-mcp/tests/tools.rs`
+  - `crates/pa-mcp/tests/server.rs`
+- Dialogue helper/gating tests:
+  - `crates/pa-cognitive/src/dialogue_engine.rs`
+
+---
+
+## 0.6 Progress checklist
+
+- [x] Standardized social query contract for affect/dialogue intents
+- [x] Tree-first + graph/default fallback behavior with source metadata
+- [x] Read-only MCP tool registry and execution path
+- [x] MCP HTTP transport with list/call endpoints
+- [x] Basic MCP contract and validation tests
+- [x] Runtime smoke validated with live local process
+- [x] Dialogue model-driven tool-calling loop
+- [x] Bounded candidate-user orchestration policy
+- [ ] Action tool policy/approval/audit framework
+
+---
+
+## 0.7 Key invariants (still true)
+
+- Dialogue social retrieval remains gated.
+- Affect social retrieval remains always-on.
+- Graph remains source-of-truth for writes.
+- Tree remains query/read projection.
+- MCP v1 remains read-only.
 
 ---
 
@@ -70,11 +207,9 @@ Source: `crates/pa-cognitive/src/social_context.rs`.
 
 ## 1.2 Current gaps
 
-1. Query contracts are not yet standardized as a single model API for all consumers.
-2. Freshness/staleness policy is not yet normalized by intent (affect vs dialogue).
-3. Full Graph↔Tree parity framework is missing (currently mostly logs).
-4. No MCP context server yet for externalized query access.
-5. Incident lifecycle and semantic edges are not fully materialized.
+1. Full Graph↔Tree parity framework is still incomplete (currently logs/tests-first).
+2. Runtime smoke on live process has been validated for Phase 1 operational close-out.
+3. Incident lifecycle and semantic edges are not fully materialized.
 
 ---
 
@@ -621,40 +756,46 @@ Create new crate/worker or module inside cockpit runtime:
 
 ## 15) Rollout plan
 
-## Phase 1 — Query contract stabilization
+## Phase 1 — Query contract + MCP read-only transport (**current status: implemented + runtime-smoked**)
 
-- Define `SocialQueryIntent` + `SocialQueryOptions`
-- Normalize return payload + meta
-- Add unit tests for mapping/fallback
+Done:
 
-**Exit criteria:** affect/dialogue both use the normalized facade; tests pass.
+- Defined `SocialQueryIntent` + `SocialQueryOptions`
+- Normalized payload + `meta` via `query_social_context`
+- Added mapping/fallback tests in `pa-cognitive`
+- Shipped read-only MCP transport with two tools + contract tests in `pa-mcp`
+- Validated local runtime startup plus MCP list/call success and error paths
 
-## Phase 2 — Freshness and staleness control
+Still open after close-out:
 
-- Implement per-intent staleness policy
-- Add stale fallback markers + metrics
+- extra operational metrics/dashboarding for MCP request paths
 
-**Exit criteria:** freshness and stale-ratio dashboards available.
+## Phase 2 — Model-driven dialogue tool calling (**current status: implemented in code, runtime smoke still pending**)
 
-## Phase 3 — Parity framework
+Done:
 
-- Add Graph↔Tree diff sampling
-- Add alerts
+- Added feature-flagged tool-call turn loop in dialogue engine
+- Kept the social gate as pre-filter to control latency
+- Added bounded candidate-user targeting policy from current author + recent history
+- Restricted dialogue to internal read tools only
+- Preserved graceful degradation to the legacy direct-summary path
 
-**Exit criteria:** drift remains within accepted thresholds.
+**Exit criteria:** dialogue can safely call read tools on-demand and degrade gracefully.
 
-## Phase 4 — MCP read-only server
+## Phase 3 — Parity and action-ready architecture
 
-- Expose 2 core tools
-- Add environment-appropriate auth/safety guards
+- Expand Graph↔Tree parity checks + alerting.
+- Introduce policy/approval/audit interfaces for future action tools.
+- Keep action namespace disabled by default.
 
-**Exit criteria:** MCP tools stable and SLO-compliant.
+**Exit criteria:** drift monitoring is operational and action safety interfaces exist.
 
-## Phase 5 — Optional expansion
+## Phase 4 — Optional expansion
 
 - incident lifecycle
 - semantic edges (`derived_from`, `affects`, `references`)
-- classifier-based dialogue social fetch
+- classifier-assisted dialogue social fetch
+- polyglot tool executor adapters under Rust MCP control plane
 
 ---
 
@@ -714,21 +855,21 @@ Create new crate/worker or module inside cockpit runtime:
 
 ## 19) Recommended immediate next actions
 
-1. Finalize query contract + options + response meta.
-2. Implement intent-based staleness policy.
-3. Add social-query metrics/dashboard.
-4. Ship read-only MCP with the 2 core tools.
+1. Run runtime smoke for the dialogue tool loop with `dialogue_tool_calling_enabled` both `false` and `true`.
+2. Add MCP/dialogue tool-call metrics (success/error/timeout + latency) and wire to cockpit/monitoring path.
+3. Draft action-tool safety interfaces (policy/approval/audit) without enabling mutating tools.
+4. Decide whether to expose a lightweight MCP health/debug view through cockpit.
 
 ---
 
 ## 20) Invariants checklist (must remain true)
 
-- [ ] Dialogue does not receive heavy social context unless gate requires it.
-- [ ] Affect always receives social context (tree/graph/default).
-- [ ] Graph remains write/source-of-truth.
-- [ ] Tree remains read/query projection.
-- [ ] All fallbacks are observable via logs/metrics.
-- [ ] MCP v1 remains read-only.
+- [x] Dialogue does not receive heavy social context unless gate requires it.
+- [x] Affect always receives social context (tree/graph/default).
+- [x] Graph remains write/source-of-truth.
+- [x] Tree remains read/query projection.
+- [~] All fallbacks are observable via logs/metrics (log coverage in place; metrics expansion still needed).
+- [x] MCP v1 remains read-only.
 
 ---
 

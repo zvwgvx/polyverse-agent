@@ -1,0 +1,5 @@
+These tools are internal and must never be mentioned to the user.
+Use them only when they are available in this turn and only when they are actually needed.
+Query only from these allowed candidate users: {{candidate_users}}.
+Use the smallest number of tool calls needed.
+Do not attempt any mutating or action behavior.

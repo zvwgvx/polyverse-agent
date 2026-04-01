@@ -1,0 +1,20 @@
+[package]
+name = "pa-mcp"
+description = "MCP read-tool worker for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pa-core = { path = "../pa-core" }
+pa-cognitive = { path = "../pa-cognitive" }
+pa-memory = { path = "../pa-memory" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = "0.8.8"
+
+[dev-dependencies]
+tower = "0.5.2"

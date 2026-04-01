@@ -16,6 +16,7 @@ pa-cognitive = { path = "../pa-cognitive" }
 pa-memory = { path = "../pa-memory" }
 pa-state = { path = "../pa-state" }
 pa-cockpit-api = { path = "../pa-cockpit-api" }
+pa-mcp = { path = "../pa-mcp" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

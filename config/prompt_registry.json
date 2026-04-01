@@ -15,6 +15,7 @@
     "context.state.legend": "prompts/context/state_legend.txt",
     "context.state.snapshot": "prompts/context/state_snapshot.txt",
     "dialogue_engine.fallback": "prompts/dialogue_engine/fallback.txt",
+    "dialogue_engine.tool_policy": "prompts/dialogue_engine/tool_policy.txt",
     "memory.compressor.time_block": "prompts/memory/compressor_time_block.txt",
     "memory.compressor.diary_cmd": "prompts/memory/compressor_diary_cmd.txt",
     "memory.chatlog.wrapper": "prompts/memory/chatlog_wrapper.txt"

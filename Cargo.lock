@@ -5853,6 +5853,7 @@ dependencies = [
  "pa-cockpit-api",
  "pa-cognitive",
  "pa-core",
+ "pa-mcp",
  "pa-memory",
  "pa-runtime",
  "pa-sensory",
@@ -5890,6 +5891,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "futures",
  "pa-core",
@@ -5914,6 +5916,23 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tracing",
+]
+
+[[package]]
+name = "pa-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "pa-cognitive",
+ "pa-core",
+ "pa-memory",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
  "tracing",
 ]
 
