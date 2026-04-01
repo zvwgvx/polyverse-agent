@@ -8,9 +8,10 @@
 - Minimal grayscale UI.
 
 ## Backend
-- Worker: `cockpit_api` (`crates/pa-cockpit-api`).
-- State schema/store: `crates/pa-state`.
+- Worker: `cockpit_api` (`crates/pa-cockpit-api` in the current tree; target top-level role is `services/pa-cockpit-api`).
+- State schema/store: `crates/pa-state` in the current tree; target top-level role is `libs/pa-state`.
 - Default schema path: `config/state_schema.v0.json`.
+- Target workspace layout reference: `docs/workspace-layout.md`.
 
 ## Runtime env
 - `COCKPIT_ENABLED=true`

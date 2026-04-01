@@ -19,6 +19,14 @@ struct SettingsJson {
     chat_max_tokens: Option<u32>,
     #[serde(default)]
     semantic_max_tokens: Option<u32>,
+    #[serde(default)]
+    dialogue_tool_calling_enabled: Option<bool>,
+    #[serde(default)]
+    dialogue_tool_max_calls_per_turn: Option<usize>,
+    #[serde(default)]
+    dialogue_tool_timeout_ms: Option<u64>,
+    #[serde(default)]
+    dialogue_tool_max_candidate_users: Option<usize>,
 }
 
 fn parse_truthy(value: &str) -> bool {
@@ -91,6 +99,18 @@ fn resolve_debug_mode(settings: &SettingsJson) -> bool {
         .unwrap_or(false)
 }
 
+fn resolve_dialogue_tool_calling(settings: &SettingsJson) -> DialogueToolCallingConfig {
+    DialogueToolCallingConfig {
+        enabled: settings.dialogue_tool_calling_enabled.unwrap_or(false),
+        max_calls_per_turn: settings.dialogue_tool_max_calls_per_turn.unwrap_or(2).max(1),
+        timeout_ms: settings.dialogue_tool_timeout_ms.unwrap_or(1_500).max(100),
+        max_candidate_users: settings
+            .dialogue_tool_max_candidate_users
+            .unwrap_or(3)
+            .max(1),
+    }
+}
+
 fn apply_non_api_settings_to_env(settings: &SettingsJson) {
     if std::env::var("SEMANTIC_MAX_TOKENS").is_err() {
         std::env::set_var(
@@ -129,7 +149,9 @@ fn load_settings_and_apply_env() -> SettingsJson {
 use pa_cognitive::{
     AffectEvaluatorConfig, AffectEvaluatorWorker, DialogueEngineConfig, DialogueEngineWorker,
 };
+use pa_cognitive::dialogue_engine::DialogueToolCallingConfig;
 use pa_cockpit_api::{CockpitApiConfig, CockpitWorker};
+use pa_mcp::{McpConfig, McpWorker};
 use pa_memory::MemoryWorker;
 use pa_runtime::{Coordinator, Supervisor};
 use pa_sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
@@ -219,6 +241,43 @@ fn parse_env_bool(name: &str, default: bool) -> bool {
         .ok()
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+fn resolve_mcp_enabled() -> bool {
+    parse_env_bool("MCP_ENABLED", false)
+}
+
+fn resolve_mcp_bind() -> String {
+    std::env::var("MCP_BIND")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "127.0.0.1:4790".to_string())
+}
+
+fn resolve_mcp_request_timeout_ms() -> u64 {
+    std::env::var("MCP_REQUEST_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.max(100))
+        .unwrap_or(2_000)
+}
+
+fn resolve_mcp_max_tool_calls_per_turn() -> usize {
+    std::env::var("MCP_MAX_TOOL_CALLS_PER_TURN")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.max(1))
+        .unwrap_or(4)
+}
+
+fn load_mcp_config() -> McpConfig {
+    let mut config = McpConfig::from_env();
+    config.enabled = resolve_mcp_enabled();
+    config.bind_addr = resolve_mcp_bind();
+    config.request_timeout_ms = resolve_mcp_request_timeout_ms();
+    config.max_tool_calls_per_turn = resolve_mcp_max_tool_calls_per_turn();
+    config
 }
 
 fn load_config() -> Result<Config> {
@@ -419,6 +478,16 @@ async fn main() -> Result<()> {
 
     info!("Initializing SurrealDB Cognitive Graph...");
     let cognitive_graph = pa_memory::graph::CognitiveGraph::new(&graph_db_path).await?;
+    let mcp_config = load_mcp_config();
+
+    if mcp_config.enabled {
+        info!(
+            max_tool_calls_per_turn = mcp_config.max_tool_calls_per_turn,
+            "Registering MCP worker"
+        );
+        supervisor.register(McpWorker::new(mcp_config.clone(), cognitive_graph.clone()));
+        worker_count += 1;
+    }
 
     if compressor_opt.is_none() {
         warn!("SLM Compressor missing configs, episodic memory will not ingest new events.");
@@ -506,6 +575,7 @@ async fn main() -> Result<()> {
     }
 
     let chat_max_tokens = resolve_chat_max_tokens(&settings);
+    let dialogue_tool_calling = resolve_dialogue_tool_calling(&settings);
 
     let dialogue_engine_config = DialogueEngineConfig {
         api_base: config.dialogue_engine.api_base.clone(),
@@ -513,6 +583,7 @@ async fn main() -> Result<()> {
         model: config.dialogue_engine.model.clone(),
         chat_max_tokens,
         reasoning: config.dialogue_engine.reasoning.clone(),
+        tool_calling: dialogue_tool_calling,
     };
 
     if dialogue_engine_config.is_valid() {
