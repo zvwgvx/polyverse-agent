@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getDocBySlug, getStaticSlugs, getTopLevelSections } from "@/lib/docs";
-import { buildBreadcrumbs, routeFromSlug } from "@/lib/paths";
-import { WikiShell } from "@/components/wiki-shell";
+import { getDocBySlug, getStaticSlugs } from "@/lib/docs";
+import { buildBreadcrumbs } from "@/lib/paths";
+import { DocContent } from "@/components/doc-content";
 
 export function generateStaticParams() {
   return getStaticSlugs().map((slug) => ({ slug }));
@@ -41,10 +41,10 @@ export default async function Page({
   }
 
   return (
-    <WikiShell
-      nodes={getTopLevelSections()}
-      currentRoute={routeFromSlug(slug)}
-      page={page}
+    <DocContent
+      title={page.title}
+      summary={page.summary}
+      content={page.content}
       breadcrumbs={buildBreadcrumbs(slug, page.title)}
     />
   );

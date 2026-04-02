@@ -88,5 +88,5 @@ Cockpit is enabled by default in the agent runtime if the state schema loads suc
 ## 6. Read next
 
 - Use [Repository Map](./repository-map.md) to understand where code lives.
-- Use [Runtime Configuration](../operations/runtime-configuration.md) before changing environment or local runtime behavior.
-- Use [Architecture](../architecture/) to follow the worker runtime in more detail.
+- Use [Runtime Configuration](../operations/configuration/runtime-configuration.md) before changing environment or local runtime behavior.
+- Use [Architecture](../architecture/core-runtime/) to follow the worker runtime in more detail.

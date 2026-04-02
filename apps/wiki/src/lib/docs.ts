@@ -13,6 +13,7 @@ export type DocPage = {
   route: string;
   title: string;
   summary?: string;
+  order?: number;
   content: string;
   filePath: string;
 };
@@ -21,8 +22,9 @@ export type DocTreeNode = {
   title: string;
   route: string;
   summary?: string;
+  order?: number;
   children: DocTreeNode[];
-  page?: Pick<DocPage, "title" | "route" | "summary">;
+  page?: Pick<DocPage, "title" | "route" | "summary" | "order">;
 };
 
 const DOCS_ROOT = path.join(process.cwd(), "..", "..", "docs", "wiki");
@@ -53,6 +55,7 @@ function parseDoc(filePath: string, slug: string[]): DocPage {
     route: routeFromSlug(slug),
     title: data.title?.trim() || fallbackTitle,
     summary: data.summary?.trim() || undefined,
+    order: typeof data.order === 'number' ? data.order : undefined,
     content: parsed.content.trim(),
     filePath
   };
@@ -97,6 +100,7 @@ function buildTreeForDir(root: string, relativeDir: string): DocTreeNode {
       title: page.title,
       route: page.route,
       summary: page.summary,
+      order: page.order,
       children: []
     } satisfies DocTreeNode;
   });
@@ -104,12 +108,22 @@ function buildTreeForDir(root: string, relativeDir: string): DocTreeNode {
   const childSections = childDirs.map((dirName) => buildTreeForDir(root, path.join(relativeDir, dirName)));
   const title = page?.title ?? (segments.length === 0 ? "Wiki" : titleFromSegment(segments[segments.length - 1]));
 
+  const children = [...childSections, ...childPages].sort((a, b) => {
+    const orderA = a.order ?? 999;
+    const orderB = b.order ?? 999;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return a.title.localeCompare(b.title);
+  });
+
   return {
     title,
     route: routeFromSlug(segments),
     summary: page?.summary,
-    page: page ? { title: page.title, route: page.route, summary: page.summary } : undefined,
-    children: [...childSections, ...childPages]
+    order: page?.order,
+    page: page ? { title: page.title, route: page.route, summary: page.summary, order: page.order } : undefined,
+    children
   };
 }
 

@@ -21,6 +21,10 @@
   height: 0;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 html,
 body {
   margin: 0;
@@ -42,6 +46,7 @@ body::selection {
 a {
   color: var(--link);
   text-decoration: none;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
 }
 
 a:hover {
@@ -138,6 +143,7 @@ main.wiki-page {
 .wiki-tree-item {
   font-size: 0.92rem;
   line-height: 1.35;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
 
 .wiki-tree-summary {
@@ -158,14 +164,17 @@ main.wiki-page {
 
 .wiki-tree-summary::before {
   content: "▸";
+  display: inline-block;
   margin-right: 8px;
   color: #74808c;
   font-size: 0.76rem;
-  transform: translateY(-1px);
+  transform: translateY(-1px) rotate(0deg);
+  transition: transform 0.2s ease, color 0.15s ease;
 }
 
 .wiki-tree-summary.is-open::before {
-  content: "▾";
+  transform: translateY(-1px) rotate(90deg);
+  color: #a8b4c0;
 }
 
 .wiki-tree-summary:hover,
@@ -179,14 +188,29 @@ main.wiki-page {
   font-weight: 500;
 }
 
-.wiki-tree-summary:focus-visible {
-  outline: 1px solid rgba(230, 237, 244, 0.22);
-  outline-offset: 0;
+.wiki-tree-summary:focus-visible,
+.wiki-tree-item:focus-visible {
+  outline: 2px solid rgba(230, 237, 244, 0.35);
+  outline-offset: 1px;
+  transition: outline 0.1s ease;
 }
 
 .wiki-tree-children {
   display: grid;
   gap: 1px;
+  animation: expandTree 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top;
+}
+
+@keyframes expandTree {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scaleY(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
 }
 
 .wiki-tree-item {
@@ -226,6 +250,19 @@ main.wiki-page {
   display: grid;
   gap: 18px;
   padding: 0 0 48px;
+  opacity: 0;
+  animation: articleFadeIn 0.3s ease-out 0.05s forwards;
+}
+
+@keyframes articleFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .wiki-breadcrumbs {
@@ -286,10 +323,12 @@ main.wiki-page {
   text-decoration: underline;
   text-decoration-color: rgba(230, 237, 244, 0.28);
   text-underline-offset: 0.16em;
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
 }
 
 .wiki-article-body a:hover {
-  text-decoration-color: rgba(230, 237, 244, 0.68);
+  color: #fff;
+  text-decoration-color: rgba(230, 237, 244, 0.85);
 }
 
 .wiki-article-body h2,
@@ -355,9 +394,16 @@ main.wiki-page {
 .wiki-article-body :not(pre) > code {
   padding: 0.15rem 0.38rem;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: var(--surface-soft);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
   font-size: 0.9em;
+  color: #e2e8f0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.wiki-article-body a:hover > code {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .wiki-article-body hr {

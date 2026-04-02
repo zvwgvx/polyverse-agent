@@ -109,10 +109,21 @@ function renderNode(
   );
 }
 
+const globalOpenRoutes = new Set<string>();
+
 export function Sidebar({ nodes, currentRoute }: SidebarProps) {
   const branchRoutes = useMemo(() => collectBranchRoutes(nodes), [nodes]);
   const forcedOpenRoutes = useMemo(() => collectForcedOpenRoutes(nodes, currentRoute), [nodes, currentRoute]);
-  const [openRoutes, setOpenRoutes] = useState<Set<string>>(() => new Set(forcedOpenRoutes));
+
+  const [openRoutes, setOpenRoutes] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    globalOpenRoutes.forEach((route) => initial.add(route));
+    forcedOpenRoutes.forEach((route) => {
+      initial.add(route);
+      globalOpenRoutes.add(route);
+    });
+    return initial;
+  });
 
   useEffect(() => {
     setOpenRoutes((previous) => {
@@ -121,6 +132,7 @@ export function Sidebar({ nodes, currentRoute }: SidebarProps) {
       branchRoutes.forEach((route) => {
         if (previous.has(route) || forcedOpenRoutes.has(route)) {
           next.add(route);
+          globalOpenRoutes.add(route);
         }
       });
 
@@ -130,16 +142,14 @@ export function Sidebar({ nodes, currentRoute }: SidebarProps) {
 
   function toggleBranch(route: string): void {
     setOpenRoutes((previous) => {
-      if (forcedOpenRoutes.has(route) && previous.has(route)) {
-        return previous;
-      }
-
       const next = new Set(previous);
 
       if (next.has(route)) {
         next.delete(route);
+        globalOpenRoutes.delete(route);
       } else {
         next.add(route);
+        globalOpenRoutes.add(route);
       }
 
       return next;

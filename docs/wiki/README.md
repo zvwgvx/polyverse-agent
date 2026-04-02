@@ -1,37 +1,19 @@
 ---
 title: Polyverse Wiki
-summary: Public technical documentation for the current Polyverse repository and runtime.
+summary: Scientific architecture and operational documentation for the Polyverse runtime.
 order: 0
 ---
 
 # Polyverse Wiki
 
-Polyverse is a worker-based agent runtime built as a Rust workspace, with local web and HTTP surfaces for observability and tool access.
+Polyverse is an advanced worker-based agent runtime built around a Domain-Driven Design (DDD) architecture.
 
-This wiki documents the repository as it exists today. It focuses on the current codebase, current commands, and current runtime behavior rather than older handoff or RFC-style notes.
+This wiki is strictly organized following a scientific taxonomy, cleanly separating the infrastructure runtime, the core agent domain, the storage layers, external boundaries, and developer operations.
 
-## What this wiki covers
+## Knowledge Trees
 
-- repository layout and reading paths
-- runtime architecture and event flow
-- local development and runtime configuration
-- configuration and testing reference
-
-## Read this wiki by goal
-
-- Start with [Overview](./overview/) if you are new to the repo.
-- Read [Architecture](./architecture/) to understand the worker runtime, event flow, and memory layers.
-- Use [Operations](./operations/) for local setup and runtime configuration.
-- Use [Reference](./reference/) for configuration and testing lookups.
-
-## Current repository surfaces
-
-- `apps/agent` — main binary and composition root
-- `apps/cockpit-web` — local Next.js cockpit UI
-- `apps/wiki` — filesystem-driven wiki frontend for `docs/wiki`
-- `services/cockpit-api` — local observability and prompt/state API
-- `services/mcp` — local read-only MCP HTTP surface
-
-## Scope note
-
-The repository still contains older design and handoff notes under `docs/`. Some of those files are useful background material, but this wiki only documents behavior that is supported by the live repository layout, code, config, and tests.
+- [Overview](./overview/) — Repository map and quickstart.
+- [Architecture](./architecture/) — The deep technical architecture of the agent, split into Core Runtime, Agent Domain, Cognitive Memory, and Sensory I/O.
+- [Local Interfaces](./local-interfaces/) — Network boundaries (Cockpit and MCP).
+- [Operations](./operations/) — Configuration and Developer tooling.
+- [Reference](./reference/) — Raw lookup tables for intents, dimensions, and tools.
