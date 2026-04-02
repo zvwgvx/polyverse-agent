@@ -1,15 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/pa-core",
-    "crates/pa-runtime",
-    "crates/pa-sensory",
-    "crates/pa-cognitive",
-    "crates/pa-memory",
-    "crates/pa-state",
-    "crates/pa-cockpit-api",
-    "crates/pa-mcp",
-    "crates/pa-agent",
+    "libs/kernel",
+    "libs/runtime",
+    "libs/sensory",
+    "libs/cognitive",
+    "libs/memory",
+    "libs/state",
+    "services/cockpit-api",
+    "services/mcp",
+    "apps/agent",
+    "testing/test-support",
+    "testing/integration-tests",
 ]
 
 [workspace.package]

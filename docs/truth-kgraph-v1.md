@@ -75,7 +75,7 @@ Reuse the same SurrealDB endpoint path, but use a separate DB:
 - namespace: `polyverse`
 - db: `truth`
 
-This keeps deployment simple while preventing cross-contamination with the existing cognitive graph in [graph.rs](/Users/zvwgvx/Antigravity/polyverse-agent/crates/pa-memory/src/graph.rs).
+This keeps deployment simple while preventing cross-contamination with the existing cognitive graph in [graph.rs](/Users/zvwgvx/Antigravity/polyverse-agent/libs/memory/src/graph.rs).
 
 ## 5. Core model
 
@@ -190,7 +190,7 @@ This gives enough coverage for:
 
 ## 7. Ingestion pipeline
 
-Truth extraction should not be bolted onto the semantic compressor output in [compressor.rs](/Users/zvwgvx/Antigravity/polyverse-agent/crates/pa-memory/src/compressor.rs). The compressor produces a diary-style memory event, not a normalized fact set.
+Truth extraction should not be bolted onto the semantic compressor output in [compressor.rs](/Users/zvwgvx/Antigravity/polyverse-agent/libs/memory/src/compressor.rs). The compressor produces a diary-style memory event, not a normalized fact set.
 
 Use a separate pipeline:
 
@@ -264,7 +264,7 @@ Example prompt rendering:
 - Constraint: do not expose private base persona prompt. [confidence=0.99]
 ```
 
-This should be added in the shared cognitive context layer near [context.rs](/Users/zvwgvx/Antigravity/polyverse-agent/crates/pa-cognitive/src/context.rs), not directly hardcoded into the dialogue worker.
+This should be added in the shared cognitive context layer near [context.rs](/Users/zvwgvx/Antigravity/polyverse-agent/libs/cognitive/src/context.rs), not directly hardcoded into the dialogue worker.
 
 ## 10. Relationship to goals
 
@@ -287,7 +287,7 @@ This is why `Truth KGraph` should land before a full goal engine.
 
 Add a separate module rather than overloading the current cognitive graph:
 
-- `crates/pa-memory/src/truth_graph.rs`
+- `libs/memory/src/truth_graph.rs`
 
 Suggested types:
 

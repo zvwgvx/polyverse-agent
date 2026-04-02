@@ -10,24 +10,24 @@ It exists to keep `crates/` from becoming a catch-all bucket for every Rust pack
 
 ```text
 apps/
-  pa-agent/
+  agent/
   cockpit-web/
 
 libs/
-  pa-core/
-  pa-runtime/
-  pa-cognitive/
-  pa-memory/
-  pa-state/
-  pa-sensory/
+  kernel/
+  runtime/
+  cognitive/
+  memory/
+  state/
+  sensory/
 
 services/
-  pa-cockpit-api/
-  pa-mcp/
+  cockpit-api/
+  mcp/
 
 testing/
-  pa-test-support/
-  pa-integration-tests/
+  test-support/
+  integration-tests/
 
 tools/
   xtask/
@@ -39,7 +39,7 @@ tools/
 Runnable applications and user-facing entrypoints.
 
 Current/target members:
-- `pa-agent`
+- `agent`
 - `cockpit-web`
 
 Important: **cockpit belongs in `apps/`**. It is an application, not a library or service.
@@ -48,12 +48,12 @@ Important: **cockpit belongs in `apps/`**. It is an application, not a library o
 Reusable internal libraries that hold the main system logic and shared runtime/domain code.
 
 Expected members:
-- `pa-core`
-- `pa-runtime`
-- `pa-cognitive`
-- `pa-memory`
-- `pa-state`
-- `pa-sensory`
+- `kernel`
+- `runtime`
+- `cognitive`
+- `memory`
+- `state`
+- `sensory`
 
 Why `libs/`:
 - more readable than a Rust-specific `crates/` bucket
@@ -64,15 +64,15 @@ Why `libs/`:
 Transport and API boundaries exposed as processes or local service surfaces.
 
 Expected members:
-- `pa-cockpit-api`
-- `pa-mcp`
+- `cockpit-api`
+- `mcp`
 
 ### `testing/`
 Shared test infrastructure and cross-package/system test packages.
 
 Expected members:
-- `pa-test-support`
-- `pa-integration-tests`
+- `test-support`
+- `integration-tests`
 
 Rule of thumb:
 - package-local tests stay next to their package (`src` unit tests or `<package>/tests/`)
@@ -102,35 +102,36 @@ Do **not** use `libs/` as a generic fallback for everything written in Rust.
 This layout is the target structure. Migration can happen incrementally.
 
 Recommended order:
-1. keep existing crate/package names (`pa-*`) stable
-2. move directories by top-level role
+1. move directories by top-level role
+2. rename crate/package names to match the role-based layout
 3. update workspace `members` in the root `Cargo.toml`
 4. update path references in docs and commands after each move
+5. run focused cargo checks/tests after each rename step
 
-Until migration is complete, older docs may still reference historical paths under `crates/`.
+Some older docs may still reference historical paths under `crates/`; treat those as pre-migration references and prefer the live `apps/`, `libs/`, and `services/` paths.
 
 ## Current mapping intent
 
 ```text
 apps/
-  pa-agent                 # target move from crates/pa-agent
+  agent                 # moved from crates/agent
   cockpit-web              # already under apps/
 
 libs/
-  pa-core                  # target move from crates/pa-core
-  pa-runtime               # target move from crates/pa-runtime
-  pa-cognitive             # target move from crates/pa-cognitive
-  pa-memory                # target move from crates/pa-memory
-  pa-state                 # target move from crates/pa-state
-  pa-sensory               # target move from crates/pa-sensory
+  kernel                  # moved from crates/kernel
+  runtime               # moved from crates/runtime
+  cognitive             # moved from crates/cognitive
+  memory                # moved from crates/memory
+  state                 # moved from crates/state
+  sensory               # moved from crates/sensory
 
 services/
-  pa-cockpit-api           # target move from crates/pa-cockpit-api
-  pa-mcp                   # target move from crates/pa-mcp
+  cockpit-api           # moved from crates/cockpit-api
+  mcp                   # moved from crates/mcp
 
 testing/
-  pa-test-support          # planned
-  pa-integration-tests     # planned
+  test-support          # planned
+  integration-tests     # planned
 
 tools/
   xtask                    # future option
