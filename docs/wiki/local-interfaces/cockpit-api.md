@@ -8,7 +8,7 @@ order: 31
 
 The `CockpitWorker` exposed by `services/cockpit-api` runs a local HTTP server that provides deep introspection into the running agent. It is intended for developer debugging, operations monitoring, and live manipulation.
 
-It runs on `127.0.0.1:4787` by default. It is the backend that the `apps/cockpit-web` Next.js app communicates with.
+It runs on `127.0.0.1:4787` by default. It is the backend that the `apps/cockpit` Next.js app communicates with.
 
 ## Observability Capabilities
 

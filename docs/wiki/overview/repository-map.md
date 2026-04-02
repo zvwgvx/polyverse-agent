@@ -28,7 +28,7 @@ The repository is organized by role rather than by language alone. Rust packages
 
 The main Rust binary and composition root. It loads config, initializes storage, registers workers, starts the coordinator, and runs until shutdown.
 
-### `apps/cockpit-web`
+### `apps/cockpit`
 
 A minimal Next.js frontend for the local cockpit API.
 

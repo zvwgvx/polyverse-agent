@@ -16,8 +16,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 - Run the cockpit web app: `make cockpit`
 - Install cockpit dependencies only: `make cockpit-install`
 - Typecheck the cockpit web app: `make typecheck`
-- Build the cockpit web app: `cd apps/cockpit-web && npm run build`
-- Run the cockpit web app directly: `cd apps/cockpit-web && npm run dev`
+- Build the cockpit web app: `cd apps/cockpit && npm run build`
+- Run the cockpit web app directly: `cd apps/cockpit && npm run dev`
 
 ## Workspace overview
 
@@ -107,7 +107,7 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
   - `GET /api/mcp/tools`
   - `POST /api/mcp/tools/call`
   It currently serves `social.get_affect_context` and `social.get_dialogue_summary` by delegating to `cognitive`'s dialogue tool registry.
-- `apps/cockpit-web`: Next.js frontend that proxies to the local cockpit API.
+- `apps/cockpit`: Next.js frontend that proxies to the local cockpit API.
 
 ### Non-obvious design details
 
@@ -126,7 +126,7 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
 
 ## Frontend notes
 
-- `apps/cockpit-web` is intentionally minimal and currently uses Next.js 15 + React 19.
-- The main UI is a single dashboard client component at `apps/cockpit-web/src/components/dashboard.tsx` with views for overview, metrics, memory, episodic, graph, prompts, and state.
-- The frontend proxy layer lives under `apps/cockpit-web/src/app/api/cockpit/[...path]/route.ts` and forwards requests to the local cockpit API.
-- When changing cockpit behavior, check both the Axum API shapes in `cockpit-api` and the proxy/frontend expectations in `apps/cockpit-web`.
+- `apps/cockpit` is intentionally minimal and currently uses Next.js 15 + React 19.
+- The main UI is a single dashboard client component at `apps/cockpit/src/components/dashboard.tsx` with views for overview, metrics, memory, episodic, graph, prompts, and state.
+- The frontend proxy layer lives under `apps/cockpit/src/app/api/cockpit/[...path]/route.ts` and forwards requests to the local cockpit API.
+- When changing cockpit behavior, check both the Axum API shapes in `cockpit-api` and the proxy/frontend expectations in `apps/cockpit`.

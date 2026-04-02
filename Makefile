@@ -6,7 +6,7 @@ NPM ?= npm
 
 AGENT_PACKAGE := agent
 AGENT_BIN := polyverse-agent
-COCKPIT_DIR := apps/cockpit-web
+COCKPIT_DIR := apps/cockpit
 WIKI_DIR := apps/wiki
 
 .PHONY: help agent cockpit cockpit-install wiki wiki-install test typecheck
