@@ -1,0 +1,24 @@
+[package]
+name = "discord"
+description = "Discord bot service for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "discord-service"
+path = "src/main.rs"
+
+[dependencies]
+kernel = { path = "../../libs/kernel" }
+runtime = { path = "../../libs/runtime" }
+sensory = { path = "../../libs/sensory" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serenity = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }

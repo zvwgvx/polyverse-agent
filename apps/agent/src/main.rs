@@ -27,6 +27,8 @@ struct SettingsJson {
     dialogue_tool_timeout_ms: Option<u64>,
     #[serde(default)]
     dialogue_tool_max_candidate_users: Option<usize>,
+    #[serde(default)]
+    api_timeout_secs: Option<u64>,
 }
 
 fn parse_truthy(value: &str) -> bool {
@@ -151,10 +153,9 @@ use cognitive::{
 };
 use cognitive::dialogue_engine::DialogueToolCallingConfig;
 use cockpit_api::{CockpitApiConfig, CockpitWorker};
-use mcp::{McpConfig, McpWorker};
+use mcp::{McpConfig, McpTransport, McpWorker};
 use memory::MemoryWorker;
 use runtime::{Coordinator, Supervisor};
-use sensory::{DiscordWorker, TelegramWorker, discord::SelfbotWsWorker};
 use state::{
     StateCommandWorker, StateDriftWorker, StateEnvironmentWorker, StateGoalWorker, StateIntentWorker,
     StateStore, StateSystemWorker, StateUserWorker,
@@ -164,12 +165,6 @@ use std::time::Duration;
 #[derive(Debug, Deserialize)]
 struct Config {
     #[serde(default)]
-    discord_bot: DiscordBotConfig,
-    #[serde(default)]
-    discord_selfbot: DiscordSelfbotConfig,
-    #[serde(default)]
-    telegram: TelegramConfig,
-    #[serde(default)]
     agent: AgentConfig,
     #[serde(default, alias = "llm")]
     dialogue_engine: DialogueEngineFileConfig,
@@ -178,37 +173,10 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            discord_bot: DiscordBotConfig::default(),
-            discord_selfbot: DiscordSelfbotConfig::default(),
-            telegram: TelegramConfig::default(),
             agent: AgentConfig::default(),
             dialogue_engine: DialogueEngineFileConfig::default(),
         }
     }
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct DiscordBotConfig {
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    enabled: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct DiscordSelfbotConfig {
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    enabled: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct TelegramConfig {
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,6 +227,18 @@ fn resolve_mcp_enabled() -> bool {
     parse_env_bool("MCP_ENABLED", false)
 }
 
+fn resolve_mcp_transport() -> McpTransport {
+    std::env::var("MCP_TRANSPORT")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .and_then(|v| match v.as_str() {
+            "http" => Some(McpTransport::Http),
+            "stdio" => Some(McpTransport::Stdio),
+            _ => None,
+        })
+        .unwrap_or(McpTransport::Http)
+}
+
 fn resolve_mcp_bind() -> String {
     std::env::var("MCP_BIND")
         .ok()
@@ -286,6 +266,7 @@ fn resolve_mcp_max_tool_calls_per_turn() -> usize {
 fn load_mcp_config() -> McpConfig {
     let mut config = McpConfig::from_env();
     config.enabled = resolve_mcp_enabled();
+    config.transport = resolve_mcp_transport();
     config.bind_addr = resolve_mcp_bind();
     config.request_timeout_ms = resolve_mcp_request_timeout_ms();
     config.max_tool_calls_per_turn = resolve_mcp_max_tool_calls_per_turn();
@@ -310,28 +291,10 @@ fn load_config() -> Result<Config> {
         toml::from_str(&content)?
     } else {
         Config {
-            discord_bot: DiscordBotConfig::default(),
-            discord_selfbot: DiscordSelfbotConfig::default(),
-            telegram: TelegramConfig::default(),
             agent: AgentConfig::default(),
             dialogue_engine: DialogueEngineFileConfig::default(),
         }
     };
-
-    if let Ok(token) = std::env::var("DISCORD_BOT_TOKEN") {
-        config.discord_bot.token = token;
-        config.discord_bot.enabled = true;
-    }
-
-    if let Ok(token) = std::env::var("DISCORD_SELFBOT_TOKEN") {
-        config.discord_selfbot.token = token;
-        config.discord_selfbot.enabled = true;
-    }
-
-    if let Ok(token) = std::env::var("TELEGRAM_TOKEN") {
-        config.telegram.token = token;
-        config.telegram.enabled = true;
-    }
 
     if let Ok(name) = std::env::var("PA_AGENT_NAME") {
         config.agent.name = name;
@@ -399,7 +362,6 @@ async fn main() -> Result<()> {
     let mut supervisor = Supervisor::new();
 
     let mut worker_count = 0;
-    
     let cockpit_enabled = parse_env_bool("COCKPIT_ENABLED", true);
     let cockpit_bind = std::env::var("COCKPIT_BIND").unwrap_or_else(|_| "127.0.0.1:4787".to_string());
     let cockpit_max_recent_events = std::env::var("COCKPIT_MAX_RECENT_EVENTS")
@@ -430,27 +392,9 @@ async fn main() -> Result<()> {
         let _ = store.recompute_derived().await;
     }
 
-    if config.discord_bot.enabled && !config.discord_bot.token.is_empty() {
-        info!("Registering Discord Bot worker");
-        supervisor.register(DiscordWorker::new(config.discord_bot.token.clone()));
-        worker_count += 1;
-    } else if config.discord_bot.enabled {
-        warn!("Discord Bot enabled but no token provided (set DISCORD_BOT_TOKEN in .env)");
-    }
-
-    if config.discord_selfbot.enabled {
-        info!("Registering Discord Selfbot Websocket worker");
-        supervisor.register(SelfbotWsWorker::new(9000));
-        worker_count += 1;
-    }
-
-    if config.telegram.enabled && !config.telegram.token.is_empty() {
-        info!("Registering Telegram worker");
-        supervisor.register(TelegramWorker::new(config.telegram.token.clone()));
-        worker_count += 1;
-    } else if config.telegram.enabled {
-        warn!("Telegram enabled but no token provided (set TELEGRAM_TOKEN in .env)");
-    }
+    use sensory::relay::PlatformRelayWorker;
+    supervisor.register(PlatformRelayWorker::from_env());
+    worker_count += 1;
 
     use std::sync::Arc;
     use memory::{episodic::EpisodicStore, embedder::MemoryEmbedder, compressor::SemanticCompressor};
@@ -596,6 +540,7 @@ async fn main() -> Result<()> {
         chat_max_tokens,
         reasoning: config.dialogue_engine.reasoning.clone(),
         tool_calling: dialogue_tool_calling,
+        api_timeout_secs: settings.api_timeout_secs,
     };
 
     if dialogue_engine_config.is_valid() {
@@ -645,6 +590,7 @@ async fn main() -> Result<()> {
             api_key: key,
             model,
             reasoning,
+            api_timeout_secs: settings.api_timeout_secs,
         };
         if affect_evaluator_config.is_valid() {
             info!(
@@ -823,22 +769,26 @@ mod tests {
     fn resolve_mcp_config_applies_env_overrides_and_clamps() {
         let _guard = env_guard();
         remove_env("MCP_ENABLED");
+        remove_env("MCP_TRANSPORT");
         remove_env("MCP_BIND");
         remove_env("MCP_REQUEST_TIMEOUT_MS");
         remove_env("MCP_MAX_TOOL_CALLS_PER_TURN");
 
         set_env("MCP_ENABLED", "yes");
+        set_env("MCP_TRANSPORT", "stdio");
         set_env("MCP_BIND", "0.0.0.0:9999");
         set_env("MCP_REQUEST_TIMEOUT_MS", "50");
         set_env("MCP_MAX_TOOL_CALLS_PER_TURN", "0");
 
         let config = load_mcp_config();
         assert!(config.enabled);
+        assert_eq!(config.transport, McpTransport::Stdio);
         assert_eq!(config.bind_addr, "0.0.0.0:9999");
         assert_eq!(config.request_timeout_ms, 100);
         assert_eq!(config.max_tool_calls_per_turn, 1);
 
         remove_env("MCP_ENABLED");
+        remove_env("MCP_TRANSPORT");
         remove_env("MCP_BIND");
         remove_env("MCP_REQUEST_TIMEOUT_MS");
         remove_env("MCP_MAX_TOOL_CALLS_PER_TURN");
@@ -887,18 +837,6 @@ mod tests {
         fs::write(
             &config_path,
             r#"
-[discord_bot]
-enabled = false
-token = "from-file-discord"
-
-[discord_selfbot]
-enabled = false
-token = "from-file-selfbot"
-
-[telegram]
-enabled = false
-token = "from-file-telegram"
-
 [agent]
 name = "FileAgent"
 log_level = "warn"
@@ -913,9 +851,6 @@ reasoning = "file-reasoning"
         .expect("config file should be written");
 
         set_env("PA_CONFIG", &config_path);
-        set_env("DISCORD_BOT_TOKEN", "env-discord");
-        set_env("DISCORD_SELFBOT_TOKEN", "env-selfbot");
-        set_env("TELEGRAM_TOKEN", "env-telegram");
         set_env("PA_AGENT_NAME", "EnvAgent");
         set_env("PA_LOG_LEVEL", "debug");
         set_env("DIALOGUE_ENGINE_API_BASE", "http://env-base");
@@ -924,12 +859,6 @@ reasoning = "file-reasoning"
         set_env("DIALOGUE_ENGINE_REASONING", "env-reasoning");
 
         let config = load_config().expect("config should load");
-        assert!(config.discord_bot.enabled);
-        assert_eq!(config.discord_bot.token, "env-discord");
-        assert!(config.discord_selfbot.enabled);
-        assert_eq!(config.discord_selfbot.token, "env-selfbot");
-        assert!(config.telegram.enabled);
-        assert_eq!(config.telegram.token, "env-telegram");
         assert_eq!(config.agent.name, "EnvAgent");
         assert_eq!(config.agent.log_level, "debug");
         assert_eq!(config.dialogue_engine.api_base, "http://env-base");
@@ -938,9 +867,6 @@ reasoning = "file-reasoning"
         assert_eq!(config.dialogue_engine.reasoning.as_deref(), Some("env-reasoning"));
 
         remove_env("PA_CONFIG");
-        remove_env("DISCORD_BOT_TOKEN");
-        remove_env("DISCORD_SELFBOT_TOKEN");
-        remove_env("TELEGRAM_TOKEN");
         remove_env("PA_AGENT_NAME");
         remove_env("PA_LOG_LEVEL");
         remove_env("DIALOGUE_ENGINE_API_BASE");

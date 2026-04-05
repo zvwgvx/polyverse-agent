@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use async_trait::async_trait;
 use futures::StreamExt;
 use kernel::get_agent_profile;
@@ -34,6 +35,7 @@ pub struct DialogueEngineConfig {
     pub chat_max_tokens: u32,
     pub reasoning: Option<String>,
     pub tool_calling: DialogueToolCallingConfig,
+    pub api_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +272,54 @@ fn make_system_message(content: String) -> Value {
 }
 
 fn make_user_message(name: Option<String>, content: String) -> Value {
+    make_user_message_with_attachments(name, content, &[])
+}
+
+fn make_user_message_with_attachments(
+    name: Option<String>,
+    content: String,
+    attachments: &[kernel::event::ImageAttachment],
+) -> Value {
+    let content = if attachments.is_empty() {
+        Value::String(content)
+    } else {
+        let mut parts = vec![json!({
+            "type": "text",
+            "text": if content.trim().is_empty() {
+                "[user sent images]".to_string()
+            } else {
+                content
+            },
+        })];
+
+        for attachment in attachments {
+            if !kernel::event::ImageAttachment::is_supported_image_mime(&attachment.mime_type) {
+                continue;
+            }
+            if attachment.data_base64.is_empty() {
+                continue;
+            }
+            let approx_bytes = attachment.data_base64.len() * 3 / 4;
+            if approx_bytes > kernel::event::MAX_IMAGE_ATTACHMENT_BYTES {
+                continue;
+            }
+            if base64::prelude::BASE64_STANDARD
+                .decode(&attachment.data_base64)
+                .is_err()
+            {
+                continue;
+            }
+            parts.push(json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": attachment.as_data_url(),
+                },
+            }));
+        }
+
+        Value::Array(parts)
+    };
+
     match name {
         Some(name) => json!({
             "role": "user",
@@ -414,13 +464,18 @@ fn build_final_messages(
     bundle: &DialoguePromptBundle,
     user_name: String,
     user_content: String,
+    attachments: &[kernel::event::ImageAttachment],
 ) -> Vec<Value> {
     let mut messages = Vec::with_capacity(bundle.messages.len() + 2);
     messages.push(make_system_message(bundle.merged_system_prompt.clone()));
     for message in &bundle.messages {
         messages.push(message_to_value(message.clone()));
     }
-    messages.push(make_user_message(Some(user_name), user_content));
+    messages.push(make_user_message_with_attachments(
+        Some(user_name),
+        user_content,
+        attachments,
+    ));
     messages
 }
 
@@ -648,8 +703,10 @@ pub struct DialogueEngineWorker {
 
 impl DialogueEngineWorker {
     pub fn new(config: DialogueEngineConfig) -> Self {
+        let timeout_secs = config.api_timeout_secs.unwrap_or(15);
         let http_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_default();
 
@@ -1393,6 +1450,7 @@ environment: load/noise/time_pressure higher = more friction; channel_quality hi
             &bundle,
             current_username.to_string(),
             clean_content.clone(),
+            &raw_event.attachments,
         );
 
         if let Some(decision) = social_fetch_decision {
@@ -1481,6 +1539,7 @@ environment: load/noise/time_pressure higher = more friction; channel_quality hi
                                 &bundle,
                                 current_username.to_string(),
                                 clean_content.clone(),
+                                &raw_event.attachments,
                             );
                             debug!(
                                 kind = "prompt.social",
@@ -2117,6 +2176,7 @@ mod tests {
             user_id: username.to_string(),
             username: username.to_string(),
             content: content.to_string(),
+            attachments: vec![],
             is_mention: true,
             is_dm: true,
             timestamp: Utc::now(),
@@ -2187,6 +2247,7 @@ mod tests {
                 timeout_ms: 1500,
                 max_candidate_users: 3,
             },
+            api_timeout_secs: None,
         }
     }
 
@@ -2203,6 +2264,7 @@ mod tests {
                 timeout_ms: 1500,
                 max_candidate_users: 3,
             },
+            api_timeout_secs: None,
         }
     }
 
@@ -2286,10 +2348,59 @@ mod tests {
     #[test]
     fn build_final_messages_includes_system_and_user_message() {
         let bundle = test_prompt_bundle();
-        let messages = build_final_messages(&bundle, "alice".to_string(), "hello".to_string());
+        let messages = build_final_messages(&bundle, "alice".to_string(), "hello".to_string(), &[]);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].get("role").and_then(|v| v.as_str()), Some("system"));
         assert_eq!(messages[1].get("role").and_then(|v| v.as_str()), Some("user"));
+    }
+
+    #[test]
+    fn make_user_message_with_attachments_emits_multimodal_content() {
+        let attachment = kernel::event::ImageAttachment {
+            mime_type: "image/png".to_string(),
+            filename: Some("test.png".to_string()),
+            source_url: Some("https://example.test/test.png".to_string()),
+            data_base64: base64::prelude::BASE64_STANDARD.encode(b"png-data"),
+        };
+
+        let message = make_user_message_with_attachments(
+            Some("alice".to_string()),
+            "hello".to_string(),
+            &[attachment],
+        );
+
+        let content = message
+            .get("content")
+            .and_then(|value| value.as_array())
+            .expect("multimodal content array");
+        assert_eq!(content[0].get("type").and_then(|value| value.as_str()), Some("text"));
+        assert_eq!(content[1].get("type").and_then(|value| value.as_str()), Some("image_url"));
+        assert!(content[1]
+            .get("image_url")
+            .and_then(|value| value.get("url"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn make_user_message_with_attachments_inserts_placeholder_for_image_only_turn() {
+        let attachment = kernel::event::ImageAttachment {
+            mime_type: "image/jpeg".to_string(),
+            filename: None,
+            source_url: None,
+            data_base64: base64::prelude::BASE64_STANDARD.encode(b"jpeg-data"),
+        };
+
+        let message = make_user_message_with_attachments(None, String::new(), &[attachment]);
+        let content = message
+            .get("content")
+            .and_then(|value| value.as_array())
+            .expect("multimodal content array");
+        assert_eq!(
+            content[0].get("text").and_then(|value| value.as_str()),
+            Some("[user sent images]")
+        );
     }
 
     async fn spawn_mock_tool_server(responses: Vec<String>) -> (SocketAddr, Arc<StdMutex<Vec<Value>>>) {
@@ -2325,6 +2436,7 @@ mod tests {
                 timeout_ms: 1_500,
                 max_candidate_users: 3,
             },
+            api_timeout_secs: None,
         }
     }
 
@@ -2398,6 +2510,7 @@ mod tests {
             chat_max_tokens: 128,
             reasoning: None,
             tool_calling: DialogueToolCallingConfig::default(),
+            api_timeout_secs: None,
         }
         .is_valid());
         assert!(!DialogueEngineConfig {
@@ -2407,6 +2520,7 @@ mod tests {
             chat_max_tokens: 128,
             reasoning: None,
             tool_calling: DialogueToolCallingConfig::default(),
+            api_timeout_secs: None,
         }
         .is_valid());
         assert!(DialogueEngineConfig {
@@ -2416,6 +2530,7 @@ mod tests {
             chat_max_tokens: 128,
             reasoning: None,
             tool_calling: DialogueToolCallingConfig::default(),
+            api_timeout_secs: None,
         }
         .is_valid());
     }

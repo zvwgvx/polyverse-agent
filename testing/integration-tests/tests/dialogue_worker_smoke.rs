@@ -5,7 +5,7 @@ use memory::graph::SocialDelta;
 use state::EventDeltaRequest;
 use test_support::{
     bot_history_message, expect_no_event_within, formatted_history_context, history_message,
-    in_memory_graph, mention_event_in_channel, plain_streaming_responses,
+    in_memory_graph, mention_event_in_channel, mention_event_with_image, plain_streaming_responses,
     planning_then_streaming_responses, recv_event_within, seeded_short_term_memory,
     seeded_social_graph, seeded_state_store, shutdown_dialogue_worker, spawn_mock_chat_server,
     start_dialogue_worker,
@@ -26,6 +26,7 @@ fn disabled_tool_config(api_base: String) -> DialogueEngineConfig {
             timeout_ms: 1_500,
             max_candidate_users: 3,
         },
+        api_timeout_secs: None,
     }
 }
 
@@ -42,6 +43,7 @@ fn enabled_tool_config(api_base: String) -> DialogueEngineConfig {
             timeout_ms: 1_500,
             max_candidate_users: 3,
         },
+        api_timeout_secs: None,
     }
 }
 
@@ -89,6 +91,7 @@ async fn dialogue_worker_stops_when_api_config_is_invalid() {
             timeout_ms: 1_500,
             max_candidate_users: 3,
         },
+        api_timeout_secs: None,
     });
 
     let (ctx, _event_rx, _broadcast_tx, _shutdown_tx) = test_support::worker_context_channels(16);
@@ -144,6 +147,40 @@ async fn dialogue_worker_streams_final_response_and_completion_for_mentions() {
     assert_eq!(last.get("role").and_then(|v| v.as_str()), Some("user"));
     assert_eq!(last.get("name").and_then(|v| v.as_str()), Some("alice"));
     assert_eq!(last.get("content").and_then(|v| v.as_str()), Some("hello from user"));
+
+    let worker = shutdown_dialogue_worker(handle, &shutdown_tx).await;
+    assert_eq!(worker.health_check(), WorkerStatus::Stopped);
+}
+
+#[tokio::test]
+async fn dialogue_worker_sends_multimodal_user_content_for_image_turns() {
+    let (addr, requests) =
+        spawn_mock_chat_server(plain_streaming_responses(&["vision reply"]))
+            .await;
+    let worker = DialogueEngineWorker::new(disabled_tool_config(format!("http://{}", addr)))
+        .with_system_prompt("system".to_string());
+
+    let (handle, mut event_rx, broadcast_tx, shutdown_tx) = start_dialogue_worker(worker, 16).await;
+
+    let raw = mention_event_with_image("alice", "vision-channel", "nhìn ảnh này nhé");
+    broadcast_tx.send(Event::Raw(raw)).expect("broadcast should send");
+
+    let _ = recv_event_within(&mut event_rx, Duration::from_secs(1)).await;
+    let _ = recv_event_within(&mut event_rx, Duration::from_secs(1)).await;
+
+    let sent_requests = requests.lock().expect("requests lock");
+    assert_eq!(sent_requests.len(), 1);
+    let messages = sent_requests[0]
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .expect("messages array should exist");
+    let last = messages.last().expect("user message should exist");
+    let content = last
+        .get("content")
+        .and_then(|v| v.as_array())
+        .expect("multimodal content array should exist");
+    assert_eq!(content[0].get("type").and_then(|v| v.as_str()), Some("text"));
+    assert_eq!(content[1].get("type").and_then(|v| v.as_str()), Some("image_url"));
 
     let worker = shutdown_dialogue_worker(handle, &shutdown_tx).await;
     assert_eq!(worker.health_check(), WorkerStatus::Stopped);

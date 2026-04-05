@@ -1,0 +1,24 @@
+[package]
+name = "discord-selfbot"
+description = "Discord selfbot WebSocket relay service for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "discord-selfbot-service"
+path = "src/main.rs"
+
+[dependencies]
+kernel = { path = "../../libs/kernel" }
+runtime = { path = "../../libs/runtime" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio-tungstenite = "0.28.0"
+futures-util = "0.3.32"

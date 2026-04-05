@@ -1200,6 +1200,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "kernel",
@@ -2469,6 +2470,44 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "discord"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dotenvy",
+ "kernel",
+ "reqwest 0.12.28",
+ "runtime",
+ "sensory",
+ "serenity",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "discord-selfbot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "kernel",
+ "runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -7694,15 +7733,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "chrono",
- "futures-util",
  "kernel",
  "serde",
  "serde_json",
- "serenity",
- "teloxide",
  "tokio",
- "tokio-tungstenite 0.28.0",
  "tracing",
 ]
 
@@ -8807,6 +8841,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "telegram"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "kernel",
+ "reqwest 0.12.28",
+ "runtime",
+ "sensory",
+ "teloxide",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "teloxide"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8904,6 +8959,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "cognitive",
  "kernel",

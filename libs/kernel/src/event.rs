@@ -1,6 +1,30 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub const MAX_IMAGE_ATTACHMENTS_PER_MESSAGE: usize = 4;
+pub const MAX_IMAGE_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageAttachment {
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub source_url: Option<String>,
+    pub data_base64: String,
+}
+
+impl ImageAttachment {
+    pub fn is_supported_image_mime(mime_type: &str) -> bool {
+        matches!(
+            mime_type,
+            "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+        )
+    }
+
+    pub fn as_data_url(&self) -> String {
+        format!("data:{};base64,{}", self.mime_type, self.data_base64)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Platform {
     Discord,
@@ -28,6 +52,8 @@ pub struct RawEvent {
     pub user_id: String,
     pub username: String,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<ImageAttachment>,
     pub is_mention: bool,
     pub is_dm: bool,
     pub timestamp: DateTime<Utc>,
@@ -142,6 +168,7 @@ mod tests {
             user_id: "789".to_string(),
             username: "TestUser".to_string(),
             content: "Hello agent!".to_string(),
+            attachments: vec![],
             is_mention: false,
             is_dm: false,
             timestamp: Utc::now(),
@@ -162,6 +189,7 @@ mod tests {
             user_id: "u1".to_string(),
             username: "user".to_string(),
             content: "test".to_string(),
+            attachments: vec![],
             is_mention: false,
             is_dm: false,
             timestamp: Utc::now(),

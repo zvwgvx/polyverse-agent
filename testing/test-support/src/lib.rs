@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
+use base64::Engine as _;
+use kernel::event::ImageAttachment;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -107,10 +109,22 @@ pub fn mention_event_in_channel(username: &str, channel_id: &str, content: &str)
         user_id: username.to_string(),
         username: username.to_string(),
         content: content.to_string(),
+        attachments: vec![],
         is_mention: true,
         is_dm: true,
         timestamp: Utc::now(),
     }
+}
+
+pub fn mention_event_with_image(username: &str, channel_id: &str, content: &str) -> RawEvent {
+    let mut raw = mention_event_in_channel(username, channel_id, content);
+    raw.attachments = vec![ImageAttachment {
+        mime_type: "image/png".to_string(),
+        filename: Some("test.png".to_string()),
+        source_url: Some("https://example.test/test.png".to_string()),
+        data_base64: base64::prelude::BASE64_STANDARD.encode(b"png-data"),
+    }];
+    raw
 }
 
 pub fn history_message(username: &str, channel_id: &str, content: &str) -> MemoryMessage {
@@ -126,6 +140,7 @@ pub fn history_message(username: &str, channel_id: &str, content: &str) -> Memor
         user_id: username.to_string(),
         username: username.to_string(),
         content: content.to_string(),
+        attachments: vec![],
         is_mention: false,
         is_dm: true,
         timestamp: Utc::now(),

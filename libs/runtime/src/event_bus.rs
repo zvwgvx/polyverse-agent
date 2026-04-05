@@ -106,6 +106,7 @@ mod tests {
             user_id: "u1".to_string(),
             username: "user".to_string(),
             content: "hello".to_string(),
+            attachments: vec![],
             is_mention: false,
             is_dm: false,
             timestamp: chrono::Utc::now(),

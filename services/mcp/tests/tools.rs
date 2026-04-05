@@ -1,5 +1,10 @@
+use std::sync::Arc;
+
 use memory::graph::CognitiveGraph;
-use mcp::registry::{ToolNamespace, ToolRegistry};
+use mcp::{
+    registry::{ToolNamespace, ToolRegistry},
+    RegisteredTool, SocialToolProvider, ToolProvider,
+};
 use serde_json::json;
 
 fn as_f64(value: &serde_json::Value, key: &str) -> f64 {
@@ -34,14 +39,57 @@ fn assert_two_read_only_social_tools(registry: &ToolRegistry) {
     assert!(tools.iter().any(|tool| tool.name == "social.get_dialogue_summary"));
 }
 
+fn assert_registered_tool_schema(value: &serde_json::Value) {
+    assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("object"));
+    assert_eq!(
+        value.get("required")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
+        Some(vec!["user_id"])
+    );
+    assert_eq!(value.get("additionalProperties").and_then(|v| v.as_bool()), Some(false));
+}
+
 fn approx_eq(left: f64, right: f64) {
     assert!((left - right).abs() < 1e-6, "left={left} right={right}");
+}
+
+fn provider_tools() -> Vec<RegisteredTool> {
+    let provider: Arc<dyn ToolProvider> = Arc::new(SocialToolProvider::default());
+    provider.tools().to_vec()
+}
+
+fn custom_registry() -> ToolRegistry {
+    ToolRegistry::new(vec![Arc::new(SocialToolProvider::default())])
 }
 
 #[tokio::test]
 async fn registry_lists_two_read_only_social_tools() {
     let registry = ToolRegistry::default();
     assert_two_read_only_social_tools(&registry);
+}
+
+#[tokio::test]
+async fn social_provider_exposes_metadata_and_schema() {
+    let tools = provider_tools();
+    assert_eq!(tools.len(), 2);
+    for tool in tools {
+        assert!(!tool.description.is_empty());
+        assert_registered_tool_schema(&tool.input_schema);
+    }
+}
+
+#[tokio::test]
+async fn registry_exposes_registered_tool_metadata() {
+    let registry = custom_registry();
+    let tool = registry
+        .get_registered("social.get_dialogue_summary")
+        .expect("registered tool should exist");
+
+    assert_eq!(tool.descriptor.name, "social.get_dialogue_summary");
+    assert!(tool.description.contains("dialogue summary"));
+    assert_registered_tool_schema(&tool.input_schema);
+    assert_eq!(registry.list_registered().len(), registry.list().len());
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 futures = "0.3.32"
+base64 = { workspace = true }
 
 [dev-dependencies]
 axum = "0.8.8"

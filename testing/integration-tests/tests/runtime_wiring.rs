@@ -21,6 +21,7 @@ fn raw_event(content: &str) -> Event {
         user_id: "u1".to_string(),
         username: "tester".to_string(),
         content: content.to_string(),
+        attachments: vec![],
         is_mention: false,
         is_dm: true,
         timestamp: Utc::now(),
