@@ -14,6 +14,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+reqwest = { workspace = true }
+url = "2"
 axum = "0.8.8"
 
 [dev-dependencies]

@@ -5341,11 +5341,13 @@ dependencies = [
  "futures",
  "kernel",
  "memory",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
