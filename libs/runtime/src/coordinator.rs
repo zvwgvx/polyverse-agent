@@ -68,11 +68,14 @@ impl Coordinator {
     async fn handle_event(&mut self, event: Event) {
         match &event {
             Event::Raw(raw) => {
-                debug!(
+                info!(
                     platform = %raw.platform,
                     user = %raw.username,
+                    is_mention = raw.is_mention,
+                    is_dm = raw.is_dm,
+                    content_len = raw.content.len(),
                     content = %raw.content,
-                    "Received raw event"
+                    "Coordinator received raw event"
                 );
 
                 if self.state == AgentState::Idle {

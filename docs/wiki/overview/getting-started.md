@@ -70,8 +70,8 @@ cargo test -p mcp
 Typecheck or build the frontend apps directly when needed:
 
 ```bash
-cd apps/cockpit-web && npm run typecheck
-cd apps/cockpit-web && npm run build
+cd apps/cockpit && npm run typecheck
+cd apps/cockpit && npm run build
 npm --prefix apps/wiki run typecheck
 npm --prefix apps/wiki run build
 ```

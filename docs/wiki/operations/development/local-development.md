@@ -53,9 +53,9 @@ make cockpit
 Direct app-level commands:
 
 ```bash
-cd apps/cockpit-web && npm run dev
-cd apps/cockpit-web && npm run typecheck
-cd apps/cockpit-web && npm run build
+cd apps/cockpit && npm run dev
+cd apps/cockpit && npm run typecheck
+cd apps/cockpit && npm run build
 ```
 
 By default the cockpit web app proxies to `http://127.0.0.1:4787` unless `COCKPIT_API_BASE` is overridden.

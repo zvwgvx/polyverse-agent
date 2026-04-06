@@ -22,6 +22,7 @@ pub struct AffectEvaluatorConfig {
     pub api_key: String,
     pub model: String,
     pub reasoning: Option<String>,
+    pub api_timeout_secs: Option<u64>,
 }
 
 impl AffectEvaluatorConfig {
@@ -196,8 +197,10 @@ impl AffectEvaluatorWorker {
         episodic: Option<Arc<EpisodicStore>>,
         embedder: Option<Arc<MemoryEmbedder>>,
     ) -> Self {
+        let timeout_secs = config.api_timeout_secs.unwrap_or(15);
         let http_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_default();
 

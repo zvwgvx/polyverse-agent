@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 - Run the main agent: `make agent`
 - Run the main agent directly: `cargo run -p agent --bin polyverse-agent`
+- Run the Discord bot service: `make discord`
+- Run the Discord selfbot relay: `make discord-selfbot`
+- Run the Telegram bot service: `make telegram`
 - Run all Rust tests: `make test` or `cargo test -q`
 - Run tests for one crate: `cargo test -p kernel`
 - Run MCP tests: `cargo test -p mcp`
@@ -16,8 +19,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 - Run the cockpit web app: `make cockpit`
 - Install cockpit dependencies only: `make cockpit-install`
 - Typecheck the cockpit web app: `make typecheck`
-- Build the cockpit web app: `cd apps/cockpit-web && npm run build`
-- Run the cockpit web app directly: `cd apps/cockpit-web && npm run dev`
+- Build the cockpit web app: `cd apps/cockpit && npm run build`
+- Run the cockpit web app directly: `cd apps/cockpit && npm run dev`
 
 ## Workspace overview
 
@@ -25,13 +28,18 @@ This repo is a Rust workspace with these current members:
 
 - `libs/kernel`: shared contracts, event types, worker traits, prompt registry, and agent profile loading
 - `libs/runtime`: `Supervisor`, `EventBus`, and `Coordinator`
-- `libs/sensory`: platform adapters for Discord bot, Discord selfbot websocket, and Telegram
+- `libs/sensory`: shared `SensoryBuffer` and `PlatformAdapter` trait (platform SDK code now lives in platforms/)
 - `libs/cognitive`: dialogue engine, affect evaluator, social-query facade, and dialogue tool registry
 - `libs/memory`: persistence, short-term memory, episodic memory, semantic compression, and cognitive graph
 - `libs/state`: state schema/store and state-derivation workers
-- `services/cockpit-api`: local Axum API for observability and prompt/state tooling
-- `services/mcp`: local read-only MCP transport and tool registry wrapper
+- `services/cockpit-api`: local Axum API for observability and prompt/state tooling (embedded worker inside agent)
+- `services/mcp`: local read-only MCP transport and tool registry wrapper (embedded worker inside agent)
+- `platforms/discord`: standalone Discord bot process (serenity)
+- `platforms/discord-selfbot`: standalone Discord selfbot WebSocket relay + Node.js selfbot
+- `platforms/telegram`: standalone Telegram bot process (teloxide)
 - `apps/agent`: composition root / main binary
+- `testing/test-support`: shared test helpers
+- `testing/integration-tests`: workspace-level integration tests
 
 ## Configuration and runtime
 
@@ -74,20 +82,24 @@ This repo is a worker-based agent runtime. `agent` wires the system together and
   - worker trait and context in `libs/kernel/src/worker.rs`
   - agent profile loading in `libs/kernel/src/agent_profile.rs`
   - prompt registry helpers in `libs/kernel/src/prompt_registry.rs`
-- The current runtime wiring in `agent` can register:
-  - sensory workers (`DiscordWorker`, `SelfbotWsWorker`, `TelegramWorker`)
+- The current runtime wiring in `agent` registers:
   - `MemoryWorker`
   - state workers (`StateDriftWorker`, `StateIntentWorker`, `StateCommandWorker`, `StateUserWorker`, `StateGoalWorker`, `StateEnvironmentWorker`, `StateSystemWorker`)
   - `CockpitWorker`
   - `McpWorker`
   - `DialogueEngineWorker`
   - `AffectEvaluatorWorker`
+- Platform bot workers run as **separate processes** (`services/discord`, `services/discord-selfbot`, `services/telegram`) and are launched independently via `make discord`, `make discord-selfbot`, `make telegram`.
 
 When following control flow, start at `agent/src/main.rs`, then trace worker registration into `Supervisor`, then follow event types through `Coordinator` and the worker implementations.
 
 ### Major subsystems
 
-- `sensory`: platform adapters. It converts external platform traffic into `Event::Raw` and consumes `Event::Response` to send replies back out. Current adapters are Discord, Discord selfbot websocket, and Telegram.
+- `sensory`: thin shared library containing `SensoryBuffer` (forwards events onto the event bus) and the `PlatformAdapter` trait. Platform SDK code has been extracted to dedicated service crates.
+- Platform services: each runs as its own process with its own `Supervisor`+`Coordinator`:
+  - `platforms/discord`: serenity Discord bot, reads `DISCORD_BOT_TOKEN`
+  - `platforms/discord-selfbot`: WebSocket relay server (port 9000) + Node.js selfbot process, reads `DISCORD_SELFBOT_TOKEN` in `nodejs-selfbot/.env`
+  - `platforms/telegram`: teloxide Telegram bot, reads `TELEGRAM_TOKEN`
 - `cognitive`: LLM-facing workers and social query logic.
   - `DialogueEngineWorker` builds prompts from prompt registry content, short-term memory, episodic retrieval, graph context, and optional state snapshots.
   - `AffectEvaluatorWorker` separately scores social/emotional updates and writes them into memory/graph/state.
@@ -107,7 +119,7 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
   - `GET /api/mcp/tools`
   - `POST /api/mcp/tools/call`
   It currently serves `social.get_affect_context` and `social.get_dialogue_summary` by delegating to `cognitive`'s dialogue tool registry.
-- `apps/cockpit-web`: Next.js frontend that proxies to the local cockpit API.
+- `apps/cockpit`: Next.js frontend that proxies to the local cockpit API.
 
 ### Non-obvious design details
 
@@ -126,7 +138,7 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
 
 ## Frontend notes
 
-- `apps/cockpit-web` is intentionally minimal and currently uses Next.js 15 + React 19.
-- The main UI is a single dashboard client component at `apps/cockpit-web/src/components/dashboard.tsx` with views for overview, metrics, memory, episodic, graph, prompts, and state.
-- The frontend proxy layer lives under `apps/cockpit-web/src/app/api/cockpit/[...path]/route.ts` and forwards requests to the local cockpit API.
-- When changing cockpit behavior, check both the Axum API shapes in `cockpit-api` and the proxy/frontend expectations in `apps/cockpit-web`.
+- `apps/cockpit` is intentionally minimal and currently uses Next.js 15 + React 19.
+- The main UI is a single dashboard client component at `apps/cockpit/src/components/dashboard.tsx` with views for overview, metrics, memory, episodic, graph, prompts, and state.
+- The frontend proxy layer lives under `apps/cockpit/src/app/api/cockpit/[...path]/route.ts` and forwards requests to the local cockpit API.
+- When changing cockpit behavior, check both the Axum API shapes in `cockpit-api` and the proxy/frontend expectations in `apps/cockpit`.

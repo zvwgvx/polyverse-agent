@@ -7,17 +7,6 @@ use mcp::{build_mcp_router, registry::ToolRegistry};
 use serde_json::{json, Value};
 use tower::util::ServiceExt;
 
-mod config {
-    pub use mcp::config::*;
-}
-
-mod registry {
-    pub use mcp::registry::*;
-}
-
-#[path = "../src/server/mod.rs"]
-mod server_impl;
-
 async fn test_app() -> axum::Router {
     let graph = CognitiveGraph::new("memory")
         .await
@@ -55,7 +44,7 @@ async fn test_app_with_timeout_executor(request_timeout_ms: u64) -> axum::Router
         .await
         .expect("in-memory graph should initialize");
 
-    server_impl::build_mcp_router_for_tests(
+    mcp::build_mcp_router_for_tests(
         Arc::new(ToolRegistry::default()),
         graph,
         request_timeout_ms,

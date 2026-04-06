@@ -1,6 +1,6 @@
 use kernel::worker::{Worker, WorkerContext, WorkerStatus};
 use memory::graph::CognitiveGraph;
-use mcp::{McpConfig, McpWorker};
+use mcp::{McpConfig, McpTransport, McpWorker};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tokio::sync::{broadcast, mpsc};
 
@@ -18,6 +18,7 @@ fn env_guard() -> MutexGuard<'static, ()> {
 fn clear_mcp_env() {
     unsafe {
         std::env::remove_var("MCP_ENABLED");
+        std::env::remove_var("MCP_TRANSPORT");
         std::env::remove_var("MCP_BIND");
         std::env::remove_var("MCP_REQUEST_TIMEOUT_MS");
         std::env::remove_var("MCP_MAX_TOOL_CALLS_PER_TURN");
@@ -119,6 +120,7 @@ async fn invalid_bind_address_errors_during_start() {
     let mut worker = McpWorker::new(
         McpConfig {
             enabled: true,
+            transport: McpTransport::Http,
             bind_addr: "not-an-addr".to_string(),
             ..McpConfig::default()
         },
@@ -139,17 +141,20 @@ fn mcp_config_from_env_applies_defaults_and_clamps() {
 
     let defaults = McpConfig::from_env();
     assert!(!defaults.enabled);
+    assert_eq!(defaults.transport, McpTransport::Http);
     assert_eq!(defaults.bind_addr, "127.0.0.1:4790");
     assert_eq!(defaults.request_timeout_ms, 2_000);
     assert_eq!(defaults.max_tool_calls_per_turn, 4);
 
     set_mcp_env("MCP_ENABLED", "yes");
+    set_mcp_env("MCP_TRANSPORT", "stdio");
     set_mcp_env("MCP_BIND", "0.0.0.0:9999");
     set_mcp_env("MCP_REQUEST_TIMEOUT_MS", "50");
     set_mcp_env("MCP_MAX_TOOL_CALLS_PER_TURN", "0");
 
     let overridden = McpConfig::from_env();
     assert!(overridden.enabled);
+    assert_eq!(overridden.transport, McpTransport::Stdio);
     assert_eq!(overridden.bind_addr, "0.0.0.0:9999");
     assert_eq!(overridden.request_timeout_ms, 100);
     assert_eq!(overridden.max_tool_calls_per_turn, 1);
@@ -165,6 +170,7 @@ fn mcp_config_from_env_ignores_blank_bind_and_invalid_numbers() {
     set_mcp_env("MCP_MAX_TOOL_CALLS_PER_TURN", "bad");
 
     let config = McpConfig::from_env();
+    assert_eq!(config.transport, McpTransport::Http);
     assert_eq!(config.bind_addr, "127.0.0.1:4790");
     assert_eq!(config.request_timeout_ms, 2_000);
     assert_eq!(config.max_tool_calls_per_turn, 4);

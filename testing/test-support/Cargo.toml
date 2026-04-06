@@ -13,5 +13,6 @@ memory = { path = "../../libs/memory" }
 mcp = { path = "../../services/mcp" }
 state = { path = "../../libs/state" }
 serde_json = { workspace = true }
+base64 = { workspace = true }
 tokio = { workspace = true }
 tower = "0.5.2"

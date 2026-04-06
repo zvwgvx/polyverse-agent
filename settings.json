@@ -6,5 +6,6 @@
   "dialogue_tool_calling_enabled": false,
   "dialogue_tool_max_calls_per_turn": 2,
   "dialogue_tool_timeout_ms": 1500,
-  "dialogue_tool_max_candidate_users": 3
+  "dialogue_tool_max_candidate_users": 3,
+  "api_timeout_secs": 15
 }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use kernel::event::{Event, SystemEvent};
+use mcp::McpTransport;
 use runtime::Supervisor;
 use test_support::in_memory_graph;
 use tokio::time::{timeout, Duration};
@@ -21,6 +22,7 @@ async fn supervisor_can_start_and_shutdown_mcp_worker() -> Result<()> {
     supervisor.register(mcp::McpWorker::new(
         mcp::McpConfig {
             enabled: true,
+            transport: McpTransport::Http,
             bind_addr: bind_addr.to_string(),
             ..mcp::McpConfig::default()
         },
@@ -65,6 +67,7 @@ async fn start_live_mcp_supervisor() -> Result<(Supervisor, std::net::SocketAddr
     supervisor.register(mcp::McpWorker::new(
         mcp::McpConfig {
             enabled: true,
+            transport: McpTransport::Http,
             bind_addr: bind_addr.to_string(),
             ..mcp::McpConfig::default()
         },
@@ -216,3 +219,4 @@ async fn live_mcp_worker_rejects_missing_user_id_over_http() -> Result<()> {
     supervisor.shutdown().await?;
     Ok(())
 }
+

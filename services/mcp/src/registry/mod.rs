@@ -1,20 +1,57 @@
 pub use cognitive::dialogue_tools::{ToolDescriptor, ToolNamespace};
-use cognitive::DialogueToolRegistry;
+use std::sync::Arc;
+
+use anyhow::bail;
 use memory::graph::CognitiveGraph;
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default)]
+use crate::provider::{default_providers, RegisteredTool, ToolProvider};
+
+#[derive(Clone)]
 pub struct ToolRegistry {
-    inner: DialogueToolRegistry,
+    providers: Vec<Arc<dyn ToolProvider>>,
+    tools: Vec<ToolDescriptor>,
+    registered_tools: Vec<RegisteredTool>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new(default_providers())
+    }
 }
 
 impl ToolRegistry {
+    pub fn new(providers: Vec<Arc<dyn ToolProvider>>) -> Self {
+        let registered_tools: Vec<RegisteredTool> = providers
+            .iter()
+            .flat_map(|provider| provider.tools().iter().cloned())
+            .collect();
+        let tools = registered_tools
+            .iter()
+            .map(|tool| tool.descriptor.clone())
+            .collect();
+
+        Self {
+            providers,
+            tools,
+            registered_tools,
+        }
+    }
+
     pub fn list(&self) -> &[ToolDescriptor] {
-        self.inner.list()
+        &self.tools
+    }
+
+    pub fn list_registered(&self) -> &[RegisteredTool] {
+        &self.registered_tools
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolDescriptor> {
-        self.inner.get(name)
+        self.tools.iter().find(|tool| tool.name == name)
+    }
+
+    pub fn get_registered(&self, name: &str) -> Option<&RegisteredTool> {
+        self.registered_tools.iter().find(|tool| tool.descriptor.name == name)
     }
 
     pub async fn execute(
@@ -23,6 +60,12 @@ impl ToolRegistry {
         input: Value,
         graph: &CognitiveGraph,
     ) -> anyhow::Result<Value> {
-        self.inner.execute(name, input, graph).await
+        for provider in &self.providers {
+            if let Some(result) = provider.execute(name, input.clone(), graph).await {
+                return result;
+            }
+        }
+
+        bail!("unknown MCP tool: {name}")
     }
 }

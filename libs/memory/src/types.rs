@@ -141,6 +141,7 @@ mod tests {
             user_id: "u1".to_string(),
             username: "TestUser".to_string(),
             content: "Hello Agent!".to_string(),
+            attachments: vec![],
             is_mention: true,
             is_dm: false,
             timestamp: Utc::now(),

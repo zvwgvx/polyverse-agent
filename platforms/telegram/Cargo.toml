@@ -1,0 +1,26 @@
+[package]
+name = "telegram"
+description = "Telegram bot service for Polyverse Agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "telegram-service"
+path = "src/main.rs"
+
+[dependencies]
+kernel = { path = "../../libs/kernel" }
+runtime = { path = "../../libs/runtime" }
+sensory = { path = "../../libs/sensory" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+teloxide = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures-util = "0.3.32"

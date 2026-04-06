@@ -1,9 +1,7 @@
-
 pub mod buffer;
-pub mod discord;
 pub mod platform;
-pub mod telegram;
+pub mod relay;
 
-pub use discord::DiscordWorker;
+pub use buffer::SensoryBuffer;
 pub use platform::PlatformAdapter;
-pub use telegram::TelegramWorker;
+pub use relay::{PlatformRelayWorker, RelayClient};

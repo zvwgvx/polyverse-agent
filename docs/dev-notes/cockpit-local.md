@@ -35,9 +35,9 @@
 - `GET /api/cockpit/prompts`
 
 ## Frontend
-- App path: `apps/cockpit-web`
+- App path: `apps/cockpit`
 - Start:
-  - `cd apps/cockpit-web`
+  - `cd apps/cockpit`
   - `npm install`
   - `npm run dev`
 
