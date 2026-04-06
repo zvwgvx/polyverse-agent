@@ -14,6 +14,6 @@ This wiki is strictly organized following a scientific taxonomy, cleanly separat
 
 - [Overview](./overview/) — Repository map and quickstart.
 - [Architecture](./architecture/) — The deep technical architecture of the agent, split into Core Runtime, Agent Domain, Cognitive Memory, and Sensory I/O.
-- [Local Interfaces](./local-interfaces/) — Network boundaries (Cockpit and MCP).
+- [Local Interfaces](./local-interfaces/) — Network boundaries (currently MCP).
 - [Operations](./operations/) — Configuration and Developer tooling.
 - [Reference](./reference/) — Raw lookup tables for intents, dimensions, and tools.

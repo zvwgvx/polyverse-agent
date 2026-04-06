@@ -25,7 +25,7 @@ pub trait Worker: Send + Sync + 'static {
 ```
 
 ### 1. `name(&self)`
-Returns a static string used for logging and by the Cockpit API to identify the worker.
+Returns a static string used for logging and runtime introspection.
 
 ### 2. `start(&mut self, ctx: WorkerContext)`
 The entry point. This method is called exactly once by the `Supervisor`. It is expected to spawn one or more Tokio tasks that run indefinitely. The worker must return `Ok(())` quickly to signal successful startup; it should *not* block the `start` call.
@@ -34,7 +34,7 @@ The entry point. This method is called exactly once by the `Supervisor`. It is e
 Called during graceful shutdown. Workers must drop connections, flush state, and terminate their spawned tasks.
 
 ### 4. `health_check(&self)`
-Called periodically (and by the Cockpit API). It returns `WorkerStatus::Healthy`, `Degraded`, `Stopped`, or `NotStarted`.
+Called periodically. It returns `WorkerStatus::Healthy`, `Degraded`, `Stopped`, or `NotStarted`.
 
 ## The `WorkerContext`
 
@@ -56,4 +56,4 @@ pub struct WorkerContext {
 
 1. **Isolation**: A crashed worker does not directly panic the `Coordinator` or other workers.
 2. **Pluggability**: The `apps/agent/src/main.rs` composition root decides which workers to register. To disable Discord, simply skip registering the `DiscordWorker`. To add a new SLM router, write a new worker that listens for `RawEvent`.
-3. **Observability**: Because all workers implement `health_check()`, the Cockpit API has a unified `/api/cockpit/status` endpoint out of the box.
+3. **Observability**: Because all workers implement `health_check()`, runtime health can be checked in a unified way.

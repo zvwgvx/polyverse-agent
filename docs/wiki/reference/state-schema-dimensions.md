@@ -41,4 +41,4 @@ Each dimension has an `update_mode` that dictates how workers modify it:
 
 ## Access
 
-To see the exact mathematical tuning for each dimension (the specific baselines and decay rates), inspect `config/state_schema.v0.json` directly. The Cockpit API (`GET /api/cockpit/state/schema`) also returns this data live.
+To see the exact mathematical tuning for each dimension (the specific baselines and decay rates), inspect `config/state_schema.v0.json` directly.

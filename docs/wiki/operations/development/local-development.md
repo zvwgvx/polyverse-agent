@@ -14,8 +14,6 @@ The root `Makefile` defines the shortest commands for common tasks:
 
 ```bash
 make agent
-make cockpit
-make cockpit-install
 make wiki
 make wiki-install
 make test
@@ -35,30 +33,6 @@ cargo run -p agent --bin polyverse-agent
 ```
 
 The main binary lives in `apps/agent`.
-
-## Run the cockpit app
-
-Install dependencies if needed:
-
-```bash
-make cockpit-install
-```
-
-Start the app:
-
-```bash
-make cockpit
-```
-
-Direct app-level commands:
-
-```bash
-cd apps/cockpit && npm run dev
-cd apps/cockpit && npm run typecheck
-cd apps/cockpit && npm run build
-```
-
-By default the cockpit web app proxies to `http://127.0.0.1:4787` unless `COCKPIT_API_BASE` is overridden.
 
 ## Run the wiki app
 
@@ -108,10 +82,9 @@ cargo build --profile fast-release
 A practical workflow for most repository changes looks like this:
 
 1. run `make agent` if you are working on the runtime
-2. run `make cockpit` if you need local observability
-3. run `make wiki` if you are editing `docs/wiki` or the wiki app
-4. run focused package tests while iterating
-5. finish with broader verification such as `make test` or app builds where relevant
+2. run `make wiki` if you are editing `docs/wiki` or the wiki app
+3. run focused package tests while iterating
+4. finish with broader verification such as `make test` or app builds where relevant
 
 ## Notes
 

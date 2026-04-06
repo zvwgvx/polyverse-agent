@@ -37,7 +37,6 @@ name = "agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cockpit-api",
  "cognitive",
  "dotenvy",
  "kernel",
@@ -1172,25 +1171,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75443c44cd6b379beb8c5b45d85d0773baf31cce901fe7bb252f4eff3008ef7d"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "cockpit-api"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "chrono",
- "kernel",
- "memory",
- "serde",
- "serde_json",
- "state",
- "sysinfo",
- "tokio",
- "tower-http",
- "tracing",
 ]
 
 [[package]]

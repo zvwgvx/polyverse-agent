@@ -66,13 +66,8 @@ The runtime also accepts the fallback aliases `OPENAI_API_BASE`, `OPENAI_API_KEY
 
 The same OpenAI-style and generic aliases are also accepted here.
 
-### Cockpit
-
-- `COCKPIT_ENABLED`
-- `COCKPIT_BIND`
-- `COCKPIT_MAX_RECENT_EVENTS`
-
 ### MCP
+
 
 - `MCP_ENABLED`
 - `MCP_BIND`
@@ -114,7 +109,6 @@ Current local settings support these keys:
 
 Unless overridden:
 
-- cockpit API binds to `127.0.0.1:4787`
 - MCP binds to `127.0.0.1:4790`
 
 ## Notes

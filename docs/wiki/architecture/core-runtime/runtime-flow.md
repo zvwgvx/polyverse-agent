@@ -53,7 +53,6 @@ Depending on config, the main binary can register:
 - sensory workers for Discord bot, Discord selfbot websocket, and Telegram
 - `MemoryWorker`
 - state workers such as drift, intent, command, user, goal, environment, and system workers
-- `CockpitWorker`
 - `McpWorker`
 - `DialogueEngineWorker`
 - `AffectEvaluatorWorker`

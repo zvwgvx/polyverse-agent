@@ -24,12 +24,8 @@ The `replacements` are key-value pairs (e.g., `("username", "John")`).
 
 The registry loads the text file associated with the `id`, replaces all instances of `{{username}}` with `"John"`, and returns the final rendered string. If the file is missing or the ID is unregistered, it gracefully falls back to the hardcoded `fallback` text.
 
-## Hot-Reloading via Cockpit
+## Prompt Updates
 
-Because prompts are externalized to files and a registry, the Cockpit API exposes them for live manipulation.
+Because prompts are externalized to files and a registry, updates can be made directly by editing the mapped files under `prompts/` and adjusting `config/prompt_registry.json` when needed.
 
-- `GET /api/cockpit/prompts`: Lists all registered logical IDs.
-- `GET /api/cockpit/prompts/:id`: Returns the raw text of the template file.
-- `PATCH /api/cockpit/prompts/:id`: Overwrites the template file on disk with a new string.
-
-When you use the `PATCH` endpoint, the `PromptRegistry` immediately starts serving the new text. The agent will use your updated instructions on the very next message it receives.
+The runtime resolves prompt text on demand, so the next turn will use the updated content from disk.

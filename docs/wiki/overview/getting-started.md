@@ -11,7 +11,6 @@ This page gives the shortest practical path to understanding and running the rep
 ## 1. Know the main entrypoints
 
 - `make agent` runs the main Rust agent.
-- `make cockpit` starts the local cockpit web app.
 - `make wiki` starts the local wiki app.
 - `make test` runs the Rust test suite.
 
@@ -31,15 +30,7 @@ cargo run -p agent --bin polyverse-agent
 
 The agent composition root lives in `apps/agent/src/main.rs`.
 
-## 3. Run the local UIs
-
-Cockpit web app:
-
-```bash
-make cockpit
-```
-
-Wiki app:
+## 3. Run the local wiki
 
 ```bash
 make wiki
@@ -67,11 +58,9 @@ Run MCP tests:
 cargo test -p mcp
 ```
 
-Typecheck or build the frontend apps directly when needed:
+Typecheck or build the wiki app directly when needed:
 
 ```bash
-cd apps/cockpit && npm run typecheck
-cd apps/cockpit && npm run build
 npm --prefix apps/wiki run typecheck
 npm --prefix apps/wiki run build
 ```
@@ -80,10 +69,9 @@ npm --prefix apps/wiki run build
 
 By default:
 
-- cockpit API binds to `127.0.0.1:4787`
 - MCP binds to `127.0.0.1:4790` when enabled
 
-Cockpit is enabled by default in the agent runtime if the state schema loads successfully. MCP is opt-in through `MCP_ENABLED`.
+MCP is opt-in through `MCP_ENABLED`.
 
 ## 6. Read next
 

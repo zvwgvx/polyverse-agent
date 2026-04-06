@@ -262,7 +262,7 @@ impl StateStore {
             .actor
             .as_deref()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or("cockpit")
+            .unwrap_or("runtime")
             .to_string();
 
         let mut values = self.values.write().await;

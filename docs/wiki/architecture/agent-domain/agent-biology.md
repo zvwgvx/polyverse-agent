@@ -39,4 +39,4 @@ Similarly, repeated negative sentiment events (classified by the `AffectEvaluato
 
 By centralizing the biological clock in the `Coordinator` rather than isolating it in a specific worker:
 1. **Consistency**: Time and energy decay happen exactly once, in deterministic order alongside chat messages.
-2. **Global Awareness**: Every single worker (Memory, Dialogue, Cockpit) sees the agent's energy shift immediately via the broadcast channel, so they can halt processing or adjust their prompt behavior synchronously.
+2. **Global Awareness**: Every single worker (Memory, Dialogue, and others) sees the agent's energy shift immediately via the broadcast channel, so they can halt processing or adjust their prompt behavior synchronously.

@@ -43,10 +43,6 @@ State isn't just for metrics; it directly influences the LLM.
 
 The `config/state_prompt.json` file configures which state domains (e.g., `emotion`, `system`) are injected into the Dialogue Engine's system prompt context. This allows the LLM to implicitly "feel" its energy level or the current tension of the room without hardcoding those concepts into the core logic.
 
-## 5. Cockpit Exposure
+## 5. State Access
 
-The Cockpit API has deep hooks into the state system:
-- `GET /api/cockpit/state/schema`: Read the live schema.
-- `GET /api/cockpit/state/values`: Read the current values.
-- `GET /api/cockpit/state/history`: Read the delta log.
-- `PATCH /api/cockpit/state/patch`: Manually overwrite a dimension for testing/debugging.
+State dimensions and tuning are defined in `config/state_schema.v0.json`, while runtime values and history are maintained by `StateStore` in `libs/state`.

@@ -152,7 +152,6 @@ use cognitive::{
     AffectEvaluatorConfig, AffectEvaluatorWorker, DialogueEngineConfig, DialogueEngineWorker,
 };
 use cognitive::dialogue_engine::DialogueToolCallingConfig;
-use cockpit_api::{CockpitApiConfig, CockpitWorker};
 use mcp::{McpConfig, McpTransport, McpWorker};
 use memory::MemoryWorker;
 use runtime::{Coordinator, Supervisor};
@@ -362,12 +361,6 @@ async fn main() -> Result<()> {
     let mut supervisor = Supervisor::new();
 
     let mut worker_count = 0;
-    let cockpit_enabled = parse_env_bool("COCKPIT_ENABLED", true);
-    let cockpit_bind = std::env::var("COCKPIT_BIND").unwrap_or_else(|_| "127.0.0.1:4787".to_string());
-    let cockpit_max_recent_events = std::env::var("COCKPIT_MAX_RECENT_EVENTS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(300);
     let state_system_enabled = parse_env_bool("STATE_SYSTEM_ENABLED", true);
     let state_system_interval_ms = std::env::var("STATE_SYSTEM_INTERVAL_MS")
         .ok()
@@ -382,7 +375,7 @@ async fn main() -> Result<()> {
             warn!(
                 path = %state_schema_path,
                 error = %e,
-                "Failed to load state schema, cockpit state API will be disabled"
+                "Failed to load state schema"
             );
             None
         }
@@ -462,7 +455,6 @@ async fn main() -> Result<()> {
     worker_count += 1;
     info!("Registered Memory worker");
 
-    let state_store_for_cockpit = state_store.clone();
     let state_store_for_affect = state_store.clone();
     let state_store_for_dialogue = state_store.clone();
     let state_store_for_drift = state_store.clone();
@@ -504,29 +496,6 @@ async fn main() -> Result<()> {
                     .with_interval(Duration::from_millis(state_system_interval_ms.max(200))),
             );
             worker_count += 1;
-        }
-    }
-
-    if cockpit_enabled {
-        if let Some(store) = state_store_for_cockpit {
-            info!(bind = %cockpit_bind, "Registering local cockpit API worker");
-            supervisor.register(
-                CockpitWorker::new(
-                    CockpitApiConfig {
-                        enabled: true,
-                        bind_addr: cockpit_bind,
-                        max_recent_events: cockpit_max_recent_events,
-                    },
-                    store,
-                )
-                .with_memory_db_path(memory_db_path.clone())
-                .with_short_term(Arc::clone(&short_term_handle))
-                .with_episodic(Arc::clone(&episodic))
-                .with_graph(cognitive_graph.clone()),
-            );
-            worker_count += 1;
-        } else {
-            warn!("Cockpit is enabled but state schema is unavailable.");
         }
     }
 

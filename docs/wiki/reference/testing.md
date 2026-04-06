@@ -38,8 +38,6 @@ cargo check -p cognitive
 Frontend verification:
 
 ```bash
-cd apps/cockpit && npm run typecheck
-cd apps/cockpit && npm run build
 npm --prefix apps/wiki run typecheck
 npm --prefix apps/wiki run build
 ```
@@ -86,7 +84,7 @@ These cover topics such as:
 - Use package-local tests when changing one package in isolation.
 - Use `services/mcp/tests/*` when changing MCP transport or tool-call contracts.
 - Use `testing/integration-tests/*` when a change crosses package boundaries or affects runtime wiring.
-- Use frontend typecheck/build commands when changing either `apps/cockpit` or `apps/wiki`.
+- Use frontend typecheck/build commands when changing `apps/wiki`.
 
 ## Notes
 

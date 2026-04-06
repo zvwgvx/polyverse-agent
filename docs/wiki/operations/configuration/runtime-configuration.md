@@ -51,16 +51,6 @@ If the runtime writes data to an unexpected place, the agent profile is one of t
 
 ## Runtime service defaults
 
-### Cockpit
-
-Default behavior:
-
-- `COCKPIT_ENABLED=true` unless overridden
-- default bind: `127.0.0.1:4787`
-- default recent event cap: `300`
-
-Cockpit depends on the state schema loading successfully.
-
 ### MCP
 
 MCP is opt-in and is loaded through `load_mcp_config()`.
@@ -114,6 +104,6 @@ Prompt documents are not hardcoded into workers. They are resolved through `conf
 
 ## Notes
 
-- Cockpit and MCP are local/internal surfaces by default, not public deployment targets.
+- MCP is a local/internal surface by default, not a public deployment target.
 - The runtime creates missing storage directories for memory, graph, and episodic data based on the resolved agent profile.
 - If a runtime claim is unclear, `apps/agent/src/main.rs` is the best source of truth.

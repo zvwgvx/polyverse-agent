@@ -6,10 +6,9 @@ NPM ?= npm
 
 AGENT_PACKAGE := agent
 AGENT_BIN := polyverse-agent
-COCKPIT_DIR := apps/cockpit
 WIKI_DIR := apps/wiki
 
-.PHONY: help agent discord discord-selfbot telegram cockpit cockpit-install wiki wiki-install test typecheck
+.PHONY: help agent discord discord-selfbot telegram wiki wiki-install test typecheck
 
 help:
 	@echo "Targets:"
@@ -17,12 +16,10 @@ help:
 	@echo "  make discord            Run the Discord bot service"
 	@echo "  make discord-selfbot    Run the Discord selfbot relay service"
 	@echo "  make telegram           Run the Telegram bot service"
-	@echo "  make cockpit            Run the local cockpit (Next.js dev)"
-	@echo "  make cockpit-install    Install cockpit dependencies"
 	@echo "  make wiki               Run the local wiki on 0.0.0.0"
 	@echo "  make wiki-install       Install wiki dependencies"
 	@echo "  make test               Run Rust tests"
-	@echo "  make typecheck          Typecheck cockpit"
+	@echo "  make typecheck          Typecheck wiki"
 
 agent:
 	$(CARGO) run -p $(AGENT_PACKAGE) --bin $(AGENT_BIN)
@@ -36,14 +33,6 @@ discord-selfbot:
 telegram:
 	$(CARGO) run -p telegram --bin telegram-service
 
-cockpit: cockpit-install
-	cd $(COCKPIT_DIR) && $(NPM) run dev
-
-cockpit-install:
-	@if [ ! -d "$(COCKPIT_DIR)/node_modules" ]; then \
-		cd $(COCKPIT_DIR) && if [ -f package-lock.json ]; then $(NPM) ci; else $(NPM) install; fi; \
-	fi
-
 wiki: wiki-install
 	cd $(WIKI_DIR) && $(NPM) run dev
 
@@ -55,5 +44,5 @@ wiki-install:
 test:
 	$(CARGO) test -q
 
-typecheck: cockpit-install
-	cd $(COCKPIT_DIR) && $(NPM) run typecheck
+typecheck: wiki-install
+	cd $(WIKI_DIR) && $(NPM) run typecheck

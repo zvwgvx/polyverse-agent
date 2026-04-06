@@ -7,7 +7,6 @@ members = [
     "libs/cognitive",
     "libs/memory",
     "libs/state",
-    "services/cockpit-api",
     "services/mcp",
     "platforms/discord",
     "platforms/discord-selfbot",

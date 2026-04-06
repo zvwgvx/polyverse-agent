@@ -11,7 +11,6 @@ It exists to keep `crates/` from becoming a catch-all bucket for every Rust pack
 ```text
 apps/
   agent/
-  cockpit-web/
 
 libs/
   kernel/
@@ -22,7 +21,6 @@ libs/
   sensory/
 
 services/
-  cockpit-api/
   mcp/
 
 testing/
@@ -40,9 +38,9 @@ Runnable applications and user-facing entrypoints.
 
 Current/target members:
 - `agent`
-- `cockpit-web`
+- `wiki`
 
-Important: **cockpit belongs in `apps/`**. It is an application, not a library or service.
+Note: keep `apps/` for executable applications and user-facing entrypoints.
 
 ### `libs/`
 Reusable internal libraries that hold the main system logic and shared runtime/domain code.
@@ -64,7 +62,6 @@ Why `libs/`:
 Transport and API boundaries exposed as processes or local service surfaces.
 
 Expected members:
-- `cockpit-api`
 - `mcp`
 
 ### `testing/`
@@ -115,7 +112,7 @@ Some older docs may still reference historical paths under `crates/`; treat thos
 ```text
 apps/
   agent                 # moved from crates/agent
-  cockpit-web              # already under apps/
+  wiki                  # documentation app
 
 libs/
   kernel                  # moved from crates/kernel
@@ -126,7 +123,6 @@ libs/
   sensory               # moved from crates/sensory
 
 services/
-  cockpit-api           # moved from crates/cockpit-api
   mcp                   # moved from crates/mcp
 
 testing/

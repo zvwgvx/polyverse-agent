@@ -12,9 +12,9 @@ The repository is organized by role rather than by language alone. Rust packages
 
 | Path | Role | Current contents |
 | --- | --- | --- |
-| `apps/` | runnable applications and user-facing entrypoints | `agent`, `cockpit-web`, `wiki` |
+| `apps/` | runnable applications and user-facing entrypoints | `agent`, `wiki` |
 | `libs/` | reusable internal libraries | `kernel`, `runtime`, `sensory`, `cognitive`, `memory`, `state` |
-| `services/` | local service and transport boundaries | `cockpit-api`, `mcp` |
+| `services/` | local service and transport boundaries | `mcp` |
 | `testing/` | shared test support and integration coverage | `test-support`, `integration-tests` |
 | `docs/` | repository documentation | legacy notes plus the public `docs/wiki` subtree |
 | `config/` | checked-in config inputs | agent profile sample, prompt registry, state schema, state prompt config |
@@ -27,10 +27,6 @@ The repository is organized by role rather than by language alone. Rust packages
 ### `apps/agent`
 
 The main Rust binary and composition root. It loads config, initializes storage, registers workers, starts the coordinator, and runs until shutdown.
-
-### `apps/cockpit`
-
-A minimal Next.js frontend for the local cockpit API.
 
 ### `apps/wiki`
 
@@ -47,7 +43,6 @@ A filesystem-driven Next.js app that renders `docs/wiki` as the public technical
 
 ## Current service packages
 
-- `services/cockpit-api` — local Axum API for observability, prompts, memory, graph, and state
 - `services/mcp` — local read-only MCP transport and registry wrapper
 
 ## Current test packages

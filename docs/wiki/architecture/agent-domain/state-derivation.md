@@ -53,4 +53,4 @@ pub struct EventDeltaRequest {
 
 The `StateStore` takes this request, validates it against the schema (`range_min`, `range_max`, `max_delta_per_turn`), updates the floating-point value, and pushes a new `StateDeltaLog` row to the history buffer.
 
-This allows the Cockpit API to show precisely *which* worker caused a state change and *why* it happened (e.g., "Energy decay tick", "User insult").
+This allows runtime inspection to show precisely *which* worker caused a state change and *why* it happened (e.g., "Energy decay tick", "User insult").

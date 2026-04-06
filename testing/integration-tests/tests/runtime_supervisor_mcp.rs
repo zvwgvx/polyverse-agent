@@ -1,3 +1,5 @@
+use std::sync::{Mutex, OnceLock};
+
 use anyhow::Result;
 use kernel::event::{Event, SystemEvent};
 use mcp::McpTransport;
@@ -56,6 +58,23 @@ async fn supervisor_can_start_and_shutdown_mcp_worker() -> Result<()> {
     Ok(())
 }
 
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn set_env_var(name: &str, value: &str) {
+    unsafe {
+        std::env::set_var(name, value);
+    }
+}
+
+fn remove_env_var(name: &str) {
+    unsafe {
+        std::env::remove_var(name);
+    }
+}
+
 async fn start_live_mcp_supervisor() -> Result<(Supervisor, std::net::SocketAddr)> {
     let graph = in_memory_graph().await;
 
@@ -102,7 +121,12 @@ async fn live_mcp_worker_serves_http_tool_requests() -> Result<()> {
         .json()
         .await?;
     let tools = tools.as_array().expect("tools payload should be array");
-    assert_eq!(tools.len(), 2);
+    let tool_names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(|v| v.as_str()))
+        .collect();
+    assert!(tool_names.contains(&"social.get_affect_context"));
+    assert!(tool_names.contains(&"social.get_dialogue_summary"));
 
     let response: serde_json::Value = client
         .post(format!("http://{bind_addr}/api/mcp/tools/call"))
@@ -215,6 +239,113 @@ async fn live_mcp_worker_rejects_missing_user_id_over_http() -> Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .contains("missing field `user_id`"));
+
+    supervisor.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_mcp_worker_serves_web_tools_when_env_enabled_over_http() -> Result<()> {
+    let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+
+    set_env_var("MCP_SEARCH_ENABLED", "true");
+    set_env_var("BRAVE_SEARCH_API_KEY", "integration-test-key");
+    set_env_var("MCP_WEB_FETCH_ENABLED", "true");
+
+    let (mut supervisor, bind_addr) = start_live_mcp_supervisor().await?;
+
+    let client = reqwest::Client::new();
+    let tools: serde_json::Value = client
+        .get(format!("http://{bind_addr}/api/mcp/tools"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let tools = tools.as_array().expect("tools payload should be array");
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(|v| v.as_str()))
+        .collect();
+    assert!(names.contains(&"search.web"));
+    assert!(names.contains(&"web.fetch"));
+
+    let web_fetch_response = client
+        .post(format!("http://{bind_addr}/api/mcp/tools/call"))
+        .json(&serde_json::json!({
+            "name": "web.fetch",
+            "input": { "url": "http://localhost" }
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(web_fetch_response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let web_fetch_payload: serde_json::Value = web_fetch_response.json().await?;
+    assert_eq!(
+        web_fetch_payload.get("ok").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert!(web_fetch_payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .contains("url host is not allowed"));
+
+    let search_response = client
+        .post(format!("http://{bind_addr}/api/mcp/tools/call"))
+        .json(&serde_json::json!({
+            "name": "search.web",
+            "input": { "query": "   " }
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(search_response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let search_payload: serde_json::Value = search_response.json().await?;
+    assert_eq!(search_payload.get("ok").and_then(|v| v.as_bool()), Some(false));
+    assert!(search_payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .contains("query is required"));
+
+    supervisor.shutdown().await?;
+
+    remove_env_var("MCP_SEARCH_ENABLED");
+    remove_env_var("BRAVE_SEARCH_API_KEY");
+    remove_env_var("MCP_WEB_FETCH_ENABLED");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_mcp_worker_does_not_expose_web_tools_when_env_disabled_over_http() -> Result<()> {
+    let _guard = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+
+    remove_env_var("MCP_SEARCH_ENABLED");
+    remove_env_var("BRAVE_SEARCH_API_KEY");
+    remove_env_var("MCP_WEB_FETCH_ENABLED");
+
+    let (mut supervisor, bind_addr) = start_live_mcp_supervisor().await?;
+
+    let client = reqwest::Client::new();
+    let tools: serde_json::Value = client
+        .get(format!("http://{bind_addr}/api/mcp/tools"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let tools = tools.as_array().expect("tools payload should be array");
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(|v| v.as_str()))
+        .collect();
+
+    assert!(!names.contains(&"search.web"));
+    assert!(!names.contains(&"web.fetch"));
 
     supervisor.shutdown().await?;
     Ok(())

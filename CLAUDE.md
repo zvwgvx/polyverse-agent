@@ -16,11 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 - Check a single crate: `cargo check -p cognitive`
 - Build the workspace: `cargo build`
 - Build optimized: `cargo build --profile fast-release`
-- Run the cockpit web app: `make cockpit`
-- Install cockpit dependencies only: `make cockpit-install`
-- Typecheck the cockpit web app: `make typecheck`
-- Build the cockpit web app: `cd apps/cockpit && npm run build`
-- Run the cockpit web app directly: `cd apps/cockpit && npm run dev`
+- Typecheck the wiki web app: `make typecheck`
+- Build the wiki web app: `cd apps/wiki && npm run build`
+- Run the wiki web app directly: `cd apps/wiki && npm run dev`
 
 ## Workspace overview
 
@@ -32,7 +30,6 @@ This repo is a Rust workspace with these current members:
 - `libs/cognitive`: dialogue engine, affect evaluator, social-query facade, and dialogue tool registry
 - `libs/memory`: persistence, short-term memory, episodic memory, semantic compression, and cognitive graph
 - `libs/state`: state schema/store and state-derivation workers
-- `services/cockpit-api`: local Axum API for observability and prompt/state tooling (embedded worker inside agent)
 - `services/mcp`: local read-only MCP transport and tool registry wrapper (embedded worker inside agent)
 - `platforms/discord`: standalone Discord bot process (serenity)
 - `platforms/discord-selfbot`: standalone Discord selfbot WebSocket relay + Node.js selfbot
@@ -57,14 +54,12 @@ This repo is a Rust workspace with these current members:
   - `config/state_schema.v0.json` defines the state dimensions loaded by `state`
   - `config/state_prompt.json` controls which state domains are injected into dialogue prompts
 - Important runtime env toggles:
-  - Cockpit: `COCKPIT_ENABLED`, `COCKPIT_BIND`, `COCKPIT_MAX_RECENT_EVENTS`
   - State runtime: `STATE_SCHEMA_PATH`, `STATE_SYSTEM_ENABLED`, `STATE_SYSTEM_INTERVAL_MS`
   - Dialogue engine: `DIALOGUE_ENGINE_API_BASE`, `DIALOGUE_ENGINE_API_KEY`, `DIALOGUE_ENGINE_MODEL`, `DIALOGUE_ENGINE_REASONING`
   - Affect evaluator: `AFFECT_EVALUATOR_API_BASE`, `AFFECT_EVALUATOR_API_KEY`, `AFFECT_EVALUATOR_MODEL`, `AFFECT_EVALUATOR_REASONING`
   - MCP: `MCP_ENABLED`, `MCP_BIND`, `MCP_REQUEST_TIMEOUT_MS`, `MCP_MAX_TOOL_CALLS_PER_TURN`
   - State prompt overrides: `STATE_PROMPT_CONFIG_PATH`, `STATE_PROMPT_ENABLED`, `STATE_PROMPT_PRECISION`, `STATE_PROMPT_INCLUDE_DERIVED`, `STATE_PROMPT_DOMAINS`
-- Default local bindings are `127.0.0.1:4787` for the cockpit API and `127.0.0.1:4790` for the MCP API unless overridden.
-- The cockpit web app proxies to `http://127.0.0.1:4787` by default unless `COCKPIT_API_BASE` is overridden.
+- Default local binding is `127.0.0.1:4790` for the MCP API unless overridden.
 
 ## High-level architecture
 
@@ -85,7 +80,6 @@ This repo is a worker-based agent runtime. `agent` wires the system together and
 - The current runtime wiring in `agent` registers:
   - `MemoryWorker`
   - state workers (`StateDriftWorker`, `StateIntentWorker`, `StateCommandWorker`, `StateUserWorker`, `StateGoalWorker`, `StateEnvironmentWorker`, `StateSystemWorker`)
-  - `CockpitWorker`
   - `McpWorker`
   - `DialogueEngineWorker`
   - `AffectEvaluatorWorker`
@@ -113,13 +107,11 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
   - relationship/cognitive graph storage in SurrealDB (`CognitiveGraph`)
   - social tree projection/read model (`SocialTreeSnapshot`, `project_social_tree`, `get_or_project_social_tree_snapshot`)
   `MemoryWorker` is the bridge that listens to broadcast events and keeps these layers in sync.
-- `state`: numeric state schema/store plus a family of workers that derive/update state dimensions from events. The store is also exposed to the cockpit and can be injected into the dialogue engine prompt.
-- `cockpit-api`: local Axum server exposing observability/debug APIs over worker status, recent events, state rows/history/metrics, memory, episodic memory, relationship graph snapshots, system metrics, and prompt documents. It also supports prompt reads/updates and manual state patching.
+- `state`: numeric state schema/store plus a family of workers that derive/update state dimensions from events. State snapshots can be injected into the dialogue engine prompt.
 - `mcp`: local Axum worker exposing read-only MCP-style endpoints:
   - `GET /api/mcp/tools`
   - `POST /api/mcp/tools/call`
   It currently serves `social.get_affect_context` and `social.get_dialogue_summary` by delegating to `cognitive`'s dialogue tool registry.
-- `apps/cockpit`: Next.js frontend that proxies to the local cockpit API.
 
 ### Non-obvious design details
 
@@ -134,11 +126,7 @@ When following control flow, start at `agent/src/main.rs`, then trace worker reg
 - State injection into model prompts is configurable. `DialogueEngineWorker` reads `config/state_prompt.json` plus env overrides to decide which state domains appear in prompt context.
 - `MemoryWorker` batches persistent writes and separately spawns semantic ingestion into episodic memory; message persistence and episodic summarization are intentionally decoupled.
 - `AffectEvaluatorWorker` and `DialogueEngineWorker` are independent workers. One generates outward responses; the other updates social/emotional understanding.
-- The cockpit API is not just metrics: it can inspect memory layers, relationship graphs, system resources, and prompt files, and it can write prompt updates back through the prompt registry path resolution logic.
-
 ## Frontend notes
 
-- `apps/cockpit` is intentionally minimal and currently uses Next.js 15 + React 19.
-- The main UI is a single dashboard client component at `apps/cockpit/src/components/dashboard.tsx` with views for overview, metrics, memory, episodic, graph, prompts, and state.
-- The frontend proxy layer lives under `apps/cockpit/src/app/api/cockpit/[...path]/route.ts` and forwards requests to the local cockpit API.
-- When changing cockpit behavior, check both the Axum API shapes in `cockpit-api` and the proxy/frontend expectations in `apps/cockpit`.
+- `apps/wiki` uses Next.js and renders technical docs from `docs/wiki`.
+- When changing documentation behavior, check both markdown sources under `docs/wiki` and the wiki app in `apps/wiki`.

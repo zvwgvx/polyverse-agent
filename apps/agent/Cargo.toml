@@ -15,7 +15,6 @@ sensory = { path = "../../libs/sensory" }
 cognitive = { path = "../../libs/cognitive" }
 memory = { path = "../../libs/memory" }
 state = { path = "../../libs/state" }
-cockpit-api = { path = "../../services/cockpit-api" }
 mcp = { path = "../../services/mcp" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
