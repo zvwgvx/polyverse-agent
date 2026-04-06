@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use memory::graph::CognitiveGraph;
-use mcp::{build_mcp_router, registry::ToolRegistry};
+use mcp::{
+    build_mcp_router, registry::ToolRegistry, WebFetchProviderConfig, WebFetchToolProvider,
+};
 use serde_json::{json, Value};
 use tower::util::ServiceExt;
 
@@ -55,6 +58,84 @@ async fn test_app_with_timeout_executor(request_timeout_ms: u64) -> axum::Router
     )
 }
 
+fn web_fetch_registry() -> ToolRegistry {
+    ToolRegistry::new(vec![Arc::new(WebFetchToolProvider::new(WebFetchProviderConfig {
+        enabled: true,
+        timeout_ms: 2_000,
+        max_bytes: 100_000,
+        max_chars: 4_000,
+        max_redirects: 3,
+        max_key_links: 8,
+    }))])
+}
+
+async fn web_fetch_app_with_stub_executor() -> axum::Router {
+    let graph = CognitiveGraph::new("memory")
+        .await
+        .expect("in-memory graph should initialize");
+
+    mcp::build_mcp_router_for_tests(
+        Arc::new(web_fetch_registry()),
+        graph,
+        2000,
+        |name, input, _graph| async move {
+            if name != "web.fetch" {
+                return Err(anyhow!("unknown MCP tool: {name}"));
+            }
+
+            let url = input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            Ok(json!({
+                "url": url,
+                "final_url": url,
+                "status": 200,
+                "title": "stub",
+                "content_markdown": "stub content",
+                "key_links": [],
+                "meta": {
+                    "source": "web_fetch",
+                    "engine": "stub",
+                    "cached": false,
+                    "response_ms": 0,
+                    "bytes": 12,
+                    "content_type": "text/plain",
+                    "redirect_count": 0,
+                    "truncated": false,
+                    "max_chars": 4000,
+                    "instruction": null
+                }
+            }))
+        },
+    )
+}
+
+async fn web_fetch_app() -> axum::Router {
+    let graph = CognitiveGraph::new("memory")
+        .await
+        .expect("in-memory graph should initialize");
+
+    build_mcp_router(Arc::new(web_fetch_registry()), graph, 2000)
+}
+
+async fn assert_bad_request_contains(app: axum::Router, body: Value, needle: &str) {
+    let response = app
+        .oneshot(tool_call_request(body))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = read_json(response).await;
+    assert_eq!(payload.get("ok").and_then(|v| v.as_bool()), Some(false));
+    assert!(payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .contains(needle));
+}
+
 #[tokio::test]
 async fn tools_call_endpoint_times_out_with_deterministic_error_shape() {
     let app = test_app_with_timeout_executor(50).await;
@@ -75,7 +156,6 @@ async fn tools_call_endpoint_times_out_with_deterministic_error_shape() {
         Some("tool call timeout")
     );
 }
-
 
 #[tokio::test]
 async fn tools_endpoint_lists_two_read_tools() {
@@ -104,6 +184,27 @@ async fn tools_endpoint_lists_two_read_tools() {
         assert_eq!(tool.get("read_only").and_then(|v| v.as_bool()), Some(true));
         assert_eq!(tool.get("namespace").and_then(|v| v.as_str()), Some("read"));
     }
+}
+
+#[tokio::test]
+async fn tools_endpoint_lists_web_fetch_when_enabled() {
+    let app = web_fetch_app_with_stub_executor().await;
+
+    let response = app
+        .oneshot(tools_list_request())
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response).await;
+
+    let arr = payload.as_array().expect("tools payload should be array");
+    assert_eq!(arr.len(), 1);
+
+    let tool = &arr[0];
+    assert_eq!(tool.get("name").and_then(|v| v.as_str()), Some("web.fetch"));
+    assert_eq!(tool.get("read_only").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(tool.get("namespace").and_then(|v| v.as_str()), Some("read"));
 }
 
 #[tokio::test]
@@ -147,6 +248,152 @@ async fn tools_call_endpoint_success_and_error_paths() {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     assert!(msg.contains("unknown MCP tool"));
+}
+
+#[tokio::test]
+async fn tools_call_endpoint_web_fetch_success_shape() {
+    let app = web_fetch_app_with_stub_executor().await;
+
+    let response = app
+        .oneshot(tool_call_request(json!({
+            "name": "web.fetch",
+            "input": { "url": "https://example.com" }
+        })))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json(response).await;
+    assert_eq!(payload.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+    let result = payload.get("result").expect("result should exist");
+    assert_eq!(
+        result.get("url").and_then(|v| v.as_str()),
+        Some("https://example.com")
+    );
+    assert_eq!(
+        result.get("final_url").and_then(|v| v.as_str()),
+        Some("https://example.com")
+    );
+    assert_eq!(result.get("status").and_then(|v| v.as_i64()), Some(200));
+    assert!(
+        result
+            .get("content_markdown")
+            .and_then(|v| v.as_str())
+            .is_some()
+    );
+    assert!(
+        result
+            .get("key_links")
+            .and_then(|v| v.as_array())
+            .is_some()
+    );
+
+    let meta = result.get("meta").expect("meta should exist");
+    for key in [
+        "source",
+        "engine",
+        "cached",
+        "response_ms",
+        "bytes",
+        "content_type",
+        "redirect_count",
+        "truncated",
+        "max_chars",
+        "instruction",
+    ] {
+        assert!(meta.get(key).is_some(), "meta missing {key}");
+    }
+}
+
+#[tokio::test]
+async fn tools_call_endpoint_web_fetch_validation_and_unknown_tool_errors() {
+    let app = web_fetch_app().await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.unknown",
+            "input": { "url": "https://example.com" }
+        }),
+        "unknown MCP tool",
+    )
+    .await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.fetch",
+            "input": {}
+        }),
+        "missing field `url`",
+    )
+    .await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.fetch",
+            "input": { "url": "file:///etc/passwd" }
+        }),
+        "url scheme must be http or https",
+    )
+    .await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.fetch",
+            "input": { "url": "http://localhost" }
+        }),
+        "url host is not allowed",
+    )
+    .await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.fetch",
+            "input": {
+                "url": "https://example.com",
+                "unexpected": true
+            }
+        }),
+        "unknown field `unexpected`",
+    )
+    .await;
+
+    assert_bad_request_contains(
+        app.clone(),
+        json!({
+            "name": "web.fetch",
+            "input": "oops"
+        }),
+        "invalid type: expected a JSON object for input",
+    )
+    .await;
+
+    let response = app
+        .oneshot(tool_call_request(json!({
+            "name": "web.fetch",
+            "input": {
+                "url": "https://example.com",
+                "max_chars": -1
+            }
+        })))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = read_json(response).await;
+    assert_eq!(payload.get("ok").and_then(|v| v.as_bool()), Some(false));
+    let msg = payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("invalid value") || msg.contains("minimum") || msg.contains("must be >=")
+    );
 }
 
 #[tokio::test]
@@ -568,4 +815,3 @@ async fn tools_call_endpoint_rejects_non_string_name_field() {
         .unwrap_or_default()
         .contains("invalid type"));
 }
-

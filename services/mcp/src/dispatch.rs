@@ -79,6 +79,40 @@ impl ToolCallFailure {
     }
 }
 
+fn validate_input_against_schema(input: &Value, input_schema: &Value) -> Result<(), ToolCallFailure> {
+    if !input.is_object() {
+        return Err(ToolCallFailure::bad_request(
+            "invalid type: expected a JSON object for input",
+        ));
+    }
+
+    let disallow_additional = input_schema
+        .get("additionalProperties")
+        .and_then(|v| v.as_bool())
+        == Some(false);
+
+    if !disallow_additional {
+        return Ok(());
+    }
+
+    let Some(allowed_properties) = input_schema.get("properties").and_then(|v| v.as_object()) else {
+        return Ok(());
+    };
+
+    let Some(input_object) = input.as_object() else {
+        return Ok(());
+    };
+
+    if let Some(extra) = input_object
+        .keys()
+        .find(|key| !allowed_properties.contains_key(key.as_str()))
+    {
+        return Err(ToolCallFailure::bad_request(format!("unknown field `{}`", extra)));
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct McpDispatcher {
     registry: Arc<ToolRegistry>,
@@ -127,6 +161,13 @@ impl McpDispatcher {
         !self.registry.list().is_empty()
     }
 
+    pub fn supports_execution_tools(&self) -> bool {
+        self.registry
+            .list()
+            .iter()
+            .any(|tool| tool.name.starts_with("execution."))
+    }
+
     pub fn supports_resources(&self) -> bool {
         false
     }
@@ -155,27 +196,14 @@ impl McpDispatcher {
             return Err(ToolCallFailure::bad_request("tool name is required"));
         }
 
-        if !req.input.is_object() {
-            return Err(ToolCallFailure::bad_request(
-                "invalid type: expected a JSON object for input",
-            ));
-        }
+        let Some(registered_tool) = self.registry.get_registered(&name) else {
+            return Err(ToolCallFailure::bad_request(format!("unknown MCP tool: {name}")));
+        };
 
-        let input = req.input;
-
-        if let Some(object) = input.as_object() {
-            if let Some(extra) = object.keys().find(|key| {
-                !matches!(
-                    key.as_str(),
-                    "user_id" | "memory_hint" | "max_staleness_ms" | "allow_stale_fallback" | "force_project"
-                )
-            }) {
-                return Err(ToolCallFailure::bad_request(format!("unknown field `{}`", extra)));
-            }
-        }
+        validate_input_against_schema(&req.input, &registered_tool.input_schema)?;
 
         let graph = self.graph.clone();
-        let fut = self.executor.execute(name, input, graph);
+        let fut = self.executor.execute(name, req.input, graph);
         match tokio::time::timeout(timeout, fut).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(err)) => Err(ToolCallFailure::bad_request(err.to_string())),
